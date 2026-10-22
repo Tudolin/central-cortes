@@ -202,7 +202,8 @@ route("PATCH", "/api/clips/:id", (_q, _r, [id], body: Partial<Clip> & { keywords
   }
   const visual = ["start_s", "end_s", "layout", "zoom", "keywords", "title"].some((k) => k in f && f[k] !== (clip as any)[k]);
   if ((body.rerender || visual) && !["PUBLISHED", "PUBLISHING"].includes(clip.status)) {
-    Object.assign(f, { status: "RENDER_QUEUED", error: "", scheduled_at: null });
+    // Edição muda o conteúdo: precisa de nova aprovação.
+    Object.assign(f, { status: "RENDER_QUEUED", error: "", scheduled_at: null, approved_at: null, schedule_locked: 0 });
   }
   updateClip(+id, f);
   if (f.status) {
@@ -223,7 +224,7 @@ route("POST", "/api/clips/:id/approve", (_q, _r, [id], body?: { when?: string })
 route("POST", "/api/clips/:id/unschedule", (_q, _r, [id]) => {
   const clip = must(getClip(+id), "Corte");
   if (!["SCHEDULED", "PUBLISH_FAILED"].includes(clip.status)) throw new HttpError(409, "Corte não está agendado");
-  updateClip(+id, { status: "PENDING_REVIEW", scheduled_at: null, schedule_locked: 0, publish_attempts: 0 });
+  updateClip(+id, { status: "PENDING_REVIEW", scheduled_at: null, approved_at: null, schedule_locked: 0, publish_attempts: 0 });
   rebalance(getJob(clip.job_id)!.channel_id);
   return { ok: true };
 });
@@ -236,7 +237,10 @@ route("POST", "/api/clips/:id/reject", (_q, _r, [id]) => {
 
 route("POST", "/api/clips/:id/rerender", (_q, _r, [id]) => {
   const clip = must(getClip(+id), "Corte");
-  updateClip(+id, { status: "RENDER_QUEUED", error: "", scheduled_at: null });
+  if (["PUBLISHED", "PUBLISHING"].includes(clip.status)) throw new HttpError(409, "Corte já publicado");
+  // Re-render sem edição (qualidade, falha): corte aprovado continua aprovado e volta à agenda ao terminar.
+  const keepApproval = clip.status === "SCHEDULED" || clip.status === "PUBLISH_FAILED";
+  updateClip(+id, { status: "RENDER_QUEUED", error: "", ...(keepApproval ? {} : { approved_at: null, scheduled_at: null }) });
   const job = getJob(clip.job_id)!;
   if (job.status === "DONE") updateJob(job.id, { status: "RENDERING" });
   return { ok: true };

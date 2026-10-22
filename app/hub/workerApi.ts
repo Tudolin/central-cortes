@@ -6,6 +6,7 @@ import { bus } from "../events.ts";
 import { HttpError, must, route, serveFile } from "../http.ts";
 import { renderCaption } from "../pipeline/caption.ts";
 import { clipPath, transcriptPath, type ClipFile } from "./media.ts";
+import { rebalance } from "./schedule.ts";
 import { tg } from "./telegram.ts";
 
 /**
@@ -121,11 +122,14 @@ route("PUT", "/api/worker/clips/:id/files/:kind", async (req, _r, [id, kind]) =>
 route("POST", "/api/worker/clips/:id/done", (_q, _r, [id], body: { layout_used: string; proxy_start: number; proxy_end: number }) => {
   const clip = must(getClip(+id), "Corte");
   if (!existsSync(clipPath(clip.job_id, clip.id, "mp4"))) throw new HttpError(409, "mp4 não recebido");
+  // Já aprovado (re-render de qualidade): volta direto para a agenda, sem pedir revisão de novo.
+  const approved = !!clip.approved_at;
   updateClip(clip.id, {
-    status: "PENDING_REVIEW", layout_used: body.layout_used, proxy_start: body.proxy_start, proxy_end: body.proxy_end,
+    status: approved ? "SCHEDULED" : "PENDING_REVIEW", layout_used: body.layout_used, proxy_start: body.proxy_start, proxy_end: body.proxy_end,
     rendered_at: new Date().toISOString(), detail: "", error: "",
   });
-  void tg.reviewReady(clip.id);
+  if (approved) rebalance(getJob(clip.job_id)!.channel_id);
+  else void tg.reviewReady(clip.id);
   finishJobIfRendered(clip.job_id);
   return { ok: true };
 }, "worker");
