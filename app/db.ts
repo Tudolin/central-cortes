@@ -5,7 +5,8 @@ import { bus } from "./events.ts";
 
 mkdirSync(config.mediaDir, { recursive: true });
 
-export const db = new DatabaseSync(config.dbPath);
+// timeout = busy_timeout: espera um lock concorrente (ex.: consulta manual, backup) em vez de falhar na hora.
+export const db = new DatabaseSync(config.dbPath, { timeout: 5000 });
 db.exec(`
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;

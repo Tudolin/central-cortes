@@ -57,6 +57,8 @@ async function send(text: string) {
   );
 }
 
+const retryAt = new Map<number, number>();
+
 export const tg = {
   /** Corte renderizado: envia o vídeo com botões de decisão. */
   async reviewReady(clipId: number) {
@@ -87,6 +89,23 @@ export const tg = {
       updateClip(c.id, { tg_message_id: msg.message_id });
     } catch (e) {
       console.error(`[telegram] reviewReady ${clipId}: ${(e as Error).message}`);
+    }
+  },
+
+  /**
+   * Envia cortes em revisão que ainda não chegaram ao Telegram: renderizados antes de o chat ser
+   * autorizado, ou cujo envio falhou. Falhas esperam 10 min antes de tentar de novo.
+   */
+  async catchUp() {
+    if (!enabled()) return;
+    const pending = all<{ id: number }>(
+      "SELECT id FROM clips WHERE status = 'PENDING_REVIEW' AND tg_message_id = 0 AND rendered_at IS NOT NULL ORDER BY score DESC, id LIMIT 10",
+    );
+    for (const { id } of pending) {
+      if ((retryAt.get(id) ?? 0) > Date.now()) continue;
+      await tg.reviewReady(id);
+      if (!getClip(id)?.tg_message_id) retryAt.set(id, Date.now() + 10 * 60_000);
+      else retryAt.delete(id);
     }
   },
 
@@ -217,6 +236,7 @@ export async function startTelegram() {
       console.log("[telegram] bot ativo (long polling)");
     }
     try {
+      await tg.catchUp();
       const updates = await call<any[]>("getUpdates", { offset, timeout: 20, allowed_updates: ["message", "callback_query"] });
       for (const u of updates) {
         offset = u.update_id + 1;

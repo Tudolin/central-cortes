@@ -12,7 +12,7 @@ import { tiktokAuthUrl, tiktokConnect, tiktokRedirect } from "./publish/tiktok.t
 import { youtubeAuthUrl, youtubeConnect, youtubeRedirect } from "./publish/youtube.ts";
 import { approve, rebalance, reject } from "./schedule.ts";
 import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
-import { chatCandidates, telegramBotInfo, telegramTest } from "./telegram.ts";
+import { chatCandidates, telegramBotInfo, telegramTest, tg } from "./telegram.ts";
 
 const publicChannel = (c: Channel) => {
   const creds = credentialsOf(c);
@@ -92,6 +92,7 @@ route("POST", "/api/settings/telegram/authorize", (_q, _r, _p, body: { chat_id: 
   if (!c) throw new HttpError(404, "Chat não encontrado — mande uma mensagem ao bot primeiro");
   writeSettings({ telegram_chat_id: c.id });
   chatCandidates.clear();
+  setTimeout(() => void tg.catchUp(), 3000); // depois da mensagem de teste: manda os cortes que já estavam esperando
   return { ok: true };
 });
 
