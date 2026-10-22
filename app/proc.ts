@@ -6,12 +6,20 @@ export interface RunResult {
 }
 
 /** Executa um binário sem shell (argumentos nunca são interpolados). Rejeita com o fim do stderr. */
-export function exec(cmd: string, args: string[], opts: SpawnOptions & { onStderr?: (line: string) => void } = {}): Promise<RunResult> {
+export function exec(
+  cmd: string,
+  args: string[],
+  opts: SpawnOptions & { onStderr?: (line: string) => void; onStdout?: (line: string) => void } = {},
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { ...opts, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let stdout = "";
     let stderr = "";
-    child.stdout!.on("data", (d: Buffer) => (stdout += d));
+    child.stdout!.on("data", (d: Buffer) => {
+      const text = d.toString();
+      stdout += text;
+      if (opts.onStdout) for (const line of text.split(/[\r\n]+/)) if (line.trim()) opts.onStdout(line);
+    });
     child.stderr!.on("data", (d: Buffer) => {
       const text = d.toString();
       stderr = (stderr + text).slice(-20_000);

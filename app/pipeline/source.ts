@@ -36,7 +36,14 @@ export async function fetchSource(jobId: number, source: string, onProgress: (ms
       [
         "--no-playlist",
         "--no-simulate",
+        // O YouTube exige resolver um desafio em JS; sem runtime o download volta 403.
+        // Reaproveita o próprio Node que roda o worker (yt-dlp só ativa o deno por padrão).
+        "--js-runtimes", `node:${process.execPath}`,
+        "--encoding", "utf-8", // no Windows o padrão é a code page do console e quebra acentos do título
+        "--retries", "10", "--fragment-retries", "10",
+        "--progress", // --print implica --quiet; isto mantém o progresso para o dashboard
         "--newline",
+        "--progress-template", "download:baixando %(progress._percent_str)s de %(progress._total_bytes_str)s",
         "-f", "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
         "--merge-output-format", "mp4",
         "-o", out,
@@ -44,9 +51,13 @@ export async function fetchSource(jobId: number, source: string, onProgress: (ms
         "--print", "before_dl:%(id)s\t%(duration)s\t%(webpage_url)s\t%(title)s",
         source,
       ],
-      { onStderr: (line) => line.includes("%") && onProgress(line.trim().slice(0, 120)) },
+      {
+        onStdout: (line) => line.startsWith("baixando") && onProgress(line.trim().replace(/\s+/g, " ").slice(0, 120)),
+        onStderr: (line) => line.startsWith("baixando") && onProgress(line.trim().replace(/\s+/g, " ").slice(0, 120)),
+      },
     );
-    const [videoId = "", duration = "0", videoUrl = source, ...title] = stdout.trim().split("\n")[0].split("\t");
+    const infoLine = stdout.split(/\r?\n/).find((l) => l.split("\t").length >= 4) ?? "";
+    const [videoId = "", duration = "0", videoUrl = source, ...title] = infoLine.split("\t");
     info = { path: out, videoId, videoUrl, title: title.join("\t"), duration: Number(duration) || (await probeDuration(out)) };
   } else {
     if (!existsSync(source)) throw new Error(`Arquivo não encontrado: ${source}`);
