@@ -35,25 +35,8 @@ O dashboard já segue as [diretrizes de Direct Post](https://developers.tiktok.c
    | Política de Privacidade | `https://debian.hedgehog-parrotfish.ts.net/central-cortes/privacy` |
 2. **App de produção.** Em *developers.tiktok.com → seu app → Production*:
    - Products: **Login Kit** (Redirect URI `https://debian.hedgehog-parrotfish.ts.net:10004/oauth/tiktok/callback`) e **Content Posting API** com **Direct Post** ativado.
-   - Scopes: `user.info.basic`, `video.upload`, `video.publish`.
+   - Scopes: `user.info.basic` e `video.publish` (veja "Produtos e escopos para produção").
 3. **Gravar o demo no sandbox.** No dashboard (Canais → TikTok: modo) escolha **Publicação direta**, salve e clique em **Reconectar** a conta (o escopo muda para `video.publish`). No sandbox os posts saem privados — é esperado e serve para o vídeo.
-
-## Roteiro do vídeo de demonstração (2–3 min)
-
-Grave a tela do navegador, sem cortes, em inglês ou com legendas em inglês se possível:
-
-1. **Login no TikTok** — Canais → Contas conectadas → TikTok → *Conectar*. Mostre a tela de autorização do TikTok com os escopos e volte ao dashboard já conectado.
-2. **Origem do conteúdo** — Pipeline: um vídeo longo do próprio canal sendo processado e os cortes aparecendo em "Pendente de Aprovação".
-3. **Tela de publicação** — Estúdio → abra um corte:
-   - aponte o nome e o avatar da conta no painel "Publicar no TikTok como …";
-   - mostre o player (prévia) e edite a legenda;
-   - abra "Quem pode ver este vídeo" mostrando que começa vazio e escolha uma opção;
-   - mostre as caixas de Comentários / Dueto / Stitch desmarcadas e marque uma;
-   - ligue "Divulgar conteúdo comercial", mostre o aviso e os rótulos ao marcar "Sua marca" e "Conteúdo de marca" (e que "Somente eu" fica bloqueado), depois desligue;
-   - destaque a declaração com o link da Music Usage Confirmation.
-4. **Consentimento e envio** — clique em **Publicar agora**. Mostre o aviso de processamento.
-5. **Resultado** — quando o card for para "Publicado", mostre o link do post e abra o vídeo no TikTok (no sandbox, visível só para você).
-6. *(Opcional)* Mostre a aprovação pelo Telegram: Aprovar → escolher visibilidade → interações → "concordo com a Music Usage Confirmation".
 
 ## Formulário "Basic information"
 
@@ -65,23 +48,65 @@ Grave a tela do navegador, sem cortes, em inglês ou com legendas em inglês se 
 | Description (máx. 120) | `Private tool that turns a creator's own long videos into vertical clips and posts approved ones to their TikTok.` |
 | Terms of Service URL | `https://debian.hedgehog-parrotfish.ts.net/central-cortes/terms` |
 | Privacy Policy URL | `https://debian.hedgehog-parrotfish.ts.net/central-cortes/privacy` |
-| Platforms | **Web** — Website URL: `https://debian.hedgehog-parrotfish.ts.net/central-cortes/` |
+| Platforms | **Web** — Web/Desktop URL: `https://debian.hedgehog-parrotfish.ts.net/central-cortes/` |
 
-## Textos para o formulário de revisão
+Domínio verificado por **URL prefix** (`/central-cortes/`): o `*.ts.net` não aceita registro TXT. Os arquivos `tiktok….txt` ficam em `~/editor-cortes/data/verify/` no notebook.
 
-**Explain how each product and scope works** (cole no campo "App review")
+## Produtos e escopos para produção
 
-> Central de Cortes is a private web dashboard used only by the owner of the Ideias em Comum channel. Login Kit (user.info.basic): the owner connects their own TikTok account; we show the connected nickname and avatar on the posting screen. Content Posting API (video.publish): for each clip, the owner previews the video, edits the caption, chooses the privacy level (no default), comments/Duet/Stitch (off by default, greyed out when disabled in the account), and the commercial content disclosure, then explicitly agrees to the Music Usage Confirmation and clicks Publish. Only then the video is uploaded to the owner's own account; we poll the publish status and show the result. video.upload sends a clip to the owner's TikTok inbox as a draft when direct posting is turned off. The app never posts to accounts other than the one that authorized it.
+A revisão exige que **todo** produto e escopo selecionado apareça no vídeo — o que não aparece deve ser removido, senão a análise atrasa. Envie só:
 
-**App description**
+- **Login Kit** — Redirect URI `https://debian.hedgehog-parrotfish.ts.net:10004/oauth/tiktok/callback`
+- **Content Posting API** com **Direct Post** ativado
+- Scopes: `user.info.basic` e `video.publish` (remova `video.upload`, `user.info.profile` e `video.list`)
 
-> Central de Cortes is a private, self-hosted tool used by a single creator to turn their own long-form videos (podcasts and debates published on their YouTube channel) into short vertical clips. The creator reviews each clip in a web dashboard, chooses the TikTok privacy level, interaction settings and commercial content disclosure for that post, and explicitly confirms the upload. Approved clips are then posted to the creator's own TikTok account at the time they selected.
+## Texto "Explain how each product and scope works" (905/1000)
 
-**How will you use the scopes**
+```text
+Central de Cortes is a private web app used only by the owner of the Ideias em Comum channel to publish short clips of the channel's own long videos to the owner's own TikTok account.
 
-> `user.info.basic`: show which TikTok account is connected. `video.upload`: send clips to the creator's inbox as drafts. `video.publish`: post the clips the creator approved, with the privacy and interaction settings they chose for each post, to their own account. The app only ever posts to the account of the user who authorized it.
+Login Kit (user.info.basic): the owner clicks "Connect" in the app, logs in with TikTok and authorizes it. We show the connected account's nickname and avatar on the posting screen so the owner knows where the clip will be posted.
 
-**Usuários-alvo**: apenas o dono do canal (uma conta). Se o formulário perguntar, deixe claro que não é um serviço aberto a terceiros.
+Content Posting API - Direct Post (video.publish): for each clip, the owner previews the video, edits the caption, picks who can view it (no default), chooses Comment/Duet/Stitch (off by default, greyed out if disabled in the account), sets the commercial content disclosure, and agrees to the Music Usage Confirmation. Only after the owner clicks "Publish now" or approves a time is the video uploaded. We poll the post status and show the result. Nothing is posted to any other account.
+```
+
+## Vídeo de demonstração (MP4, até 50 MB, ~2–3 min)
+
+**Preparação (antes de gravar)**
+
+1. No sandbox, deixe os mesmos produtos e escopos da lista acima e confira se a conta `ideiasemcomum` está em *Target users*. No cartão TikTok do dashboard, use as chaves **do sandbox**.
+2. Dashboard → **Canais** → "TikTok: modo" = **Publicação direta** → *Salvar canal*.
+3. Em **Canais → Contas conectadas → TikTok**, clique em **Desconectar** (para mostrar o login do zero no vídeo).
+4. Tenha um corte em **Pendente de Aprovação** (processe um vídeo curto se precisar).
+5. Navegador em tela cheia, zoom ~110%, abrindo o dashboard por `https://debian.hedgehog-parrotfish.ts.net:10004` — o domínio precisa ser o mesmo do site informado. Gravador: Xbox Game Bar (`Win+Alt+R`) ou OBS; exporte em 1080p.
+6. Deixe outra aba aberta no `tiktok.com` logado na conta `ideiasemcomum` (para mostrar o post no final).
+
+**Roteiro (grave sem cortes; narre em inglês ou adicione legendas em inglês)**
+
+| Tempo | Tela | O que mostrar / dizer |
+|---|---|---|
+| 0:00 | `https://debian.hedgehog-parrotfish.ts.net/central-cortes/` | "This is Central de Cortes, a private tool for the Ideias em Comum channel." Role até os links de Terms e Privacy. |
+| 0:15 | Dashboard → **Canais → Contas conectadas** | "First, the owner connects their TikTok account with Login Kit." Clique em **Conectar conta de Ideias em Comum**. |
+| 0:25 | Tela de autorização do TikTok | Mostre o app e o escopo pedido; faça login/autorize. Volte ao dashboard: o cartão mostra "conectado: Ideias em Comum". |
+| 0:45 | **Pipeline** | "Clips are generated from the channel's own long videos." Mostre o Kanban e clique num corte em *Pendente de Aprovação*. |
+| 1:00 | **Estúdio** → painel "Publicar no TikTok como" | Aponte nome e avatar: "user.info.basic shows which account will receive the post." Dê play no corte (prévia). |
+| 1:15 | Legenda | Edite a legenda: "The caption is editable." |
+| 1:25 | "Quem pode ver este vídeo" | Mostre que começa em *Select* (sem padrão) e abra a lista: "Privacy options come from creator info; there is no default." Escolha **Only me** (no sandbox só sai privado). |
+| 1:40 | Permitir Comentários / Dueto / Stitch | "Interactions are off by default; disabled ones are greyed out." Marque Comentários. |
+| 1:50 | Divulgar conteúdo comercial | Ligue: mostre o aviso "You need to indicate…". Marque *Your brand* (rótulo Promotional content), depois *Branded content* (Paid partnership) e mostre que **Only me** fica bloqueado. Desligue tudo e escolha a privacidade de novo. |
+| 2:15 | Declaração | Aponte o texto "By posting, you agree to TikTok's Music Usage Confirmation" e o link. |
+| 2:20 | Botão **Publicar agora** | "The video is uploaded only after the owner explicitly clicks Publish." Clique. Mostre o aviso de processamento. |
+| 2:30 | Kanban/Estúdio | Aguarde o card ir para **Publicado** e mostre o status do TikTok: "We poll the publish status and show the result." |
+| 2:45 | Aba do `tiktok.com` | Abra o perfil `ideiasemcomum` e mostre o vídeo recém-postado (privado, por ser sandbox). |
+
+Se o arquivo passar de 50 MB, reduza com:
+
+```bash
+ffmpeg -i demo.mp4 -vf scale=1280:-2 -c:v libx264 -crf 28 -c:a aac -b:a 96k demo-envio.mp4
+```
+
+**Depois de gravar**: volte "TikTok: modo" para **Rascunho** (ou mantenha direto, sabendo que no sandbox tudo sai privado) até a aprovação sair.
+
 
 ## Depois da aprovação
 

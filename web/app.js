@@ -222,10 +222,10 @@ function scheduleBlock(c) {
 // declaração de consentimento e aviso de processamento — o que a auditoria do TikTok verifica.
 
 const TT_PRIVACY = {
-  PUBLIC_TO_EVERYONE: "Todos",
-  MUTUAL_FOLLOW_FRIENDS: "Amigos (seguidores que você segue de volta)",
-  FOLLOWER_OF_CREATOR: "Seguidores",
-  SELF_ONLY: "Somente eu",
+  PUBLIC_TO_EVERYONE: "Todos (Everyone)",
+  MUTUAL_FOLLOW_FRIENDS: "Amigos (Friends)",
+  FOLLOWER_OF_CREATOR: "Seguidores (Followers)",
+  SELF_ONLY: "Somente eu (Only me)",
 };
 const TT_MUSIC = "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en";
 const TT_BRANDED = "https://www.tiktok.com/legal/page/global/bc-policy/en";
@@ -257,30 +257,30 @@ async function loadTikTokPanel(clipId) {
     <div class="tt card">
       <div class="tt-head">
         ${info.creator_avatar_url ? `<img src="${esc(info.creator_avatar_url)}" alt="">` : ""}
-        <div>Publicar no TikTok como <b>${esc(info.creator_nickname)}</b> <span class="muted">@${esc(info.creator_username)}</span></div>
+        <div>Publicar no TikTok como <span class="en">Post to TikTok as</span> <b>${esc(info.creator_nickname)}</b> <span class="muted">@${esc(info.creator_username)}</span></div>
       </div>
       ${tooLong ? `<div class="err">Este corte tem ${Math.round(data.duration)} s e a conta aceita vídeos de até ${info.max_video_post_duration_sec} s. Encurte o corte para publicar.</div>` : ""}
-      <label>Legenda no TikTok
+      <label>Legenda no TikTok <span class="en">Caption</span>
         <textarea id="tt-title" maxlength="2200" rows="4">${esc(s?.title ?? clip.caption)}</textarea></label>
-      <label>Quem pode ver este vídeo
+      <label>Quem pode ver este vídeo <span class="en">Who can view this video</span>
         <select id="tt-privacy">
-          <option value="" ${s ? "" : "selected"} disabled>Selecione…</option>
+          <option value="" ${s ? "" : "selected"} disabled>Selecione… (Select)</option>
           ${info.privacy_level_options.map((p) => `<option value="${p}" ${s?.privacy_level === p ? "selected" : ""}>${TT_PRIVACY[p] ?? p}</option>`).join("")}
         </select></label>
-      <div class="tt-row">Permitir:
-        ${interaction("comment", "Comentários", info.comment_disabled)}
-        ${interaction("duet", "Dueto", info.duet_disabled)}
+      <div class="tt-row">Permitir <span class="en">Allow users to</span>:
+        ${interaction("comment", "Comentários (Comment)", info.comment_disabled)}
+        ${interaction("duet", "Dueto (Duet)", info.duet_disabled)}
         ${interaction("stitch", "Stitch", info.stitch_disabled)}
       </div>
       <label class="tt-switch"><input type="checkbox" id="tt-commercial" ${s?.brand_organic || s?.brand_content ? "checked" : ""}>
-        Divulgar conteúdo comercial <span class="muted">— indique se este vídeo promove uma marca, produto ou serviço</span></label>
+        Divulgar conteúdo comercial <span class="en">Disclose video content</span> <span class="muted">— indique se este vídeo promove uma marca, produto ou serviço</span></label>
       <div id="tt-commercial-box" class="tt-commercial">
-        <label><input type="checkbox" id="tt-brand-organic" ${s?.brand_organic ? "checked" : ""}> <b>Sua marca</b> <span class="muted">— você está promovendo você mesmo ou o seu próprio negócio</span></label>
-        <label><input type="checkbox" id="tt-brand-content" ${s?.brand_content ? "checked" : ""}> <b>Conteúdo de marca</b> <span class="muted">— você está promovendo outra marca ou um terceiro</span></label>
+        <label><input type="checkbox" id="tt-brand-organic" ${s?.brand_organic ? "checked" : ""}> <b>Sua marca</b> <span class="en">Your brand</span> <span class="muted">— você está promovendo você mesmo ou o seu próprio negócio</span></label>
+        <label><input type="checkbox" id="tt-brand-content" ${s?.brand_content ? "checked" : ""}> <b>Conteúdo de marca</b> <span class="en">Branded content</span> <span class="muted">— você está promovendo outra marca ou um terceiro</span></label>
         <div id="tt-label-hint" class="tt-hint"></div>
       </div>
       <p id="tt-decl" class="tt-decl"></p>
-      <p class="muted" style="font-size:12px;margin:0">Depois de publicado, o vídeo pode levar alguns minutos para ser processado e aparecer no perfil.</p>
+      <p class="muted" style="font-size:12px;margin:0">Depois de publicado, o vídeo pode levar alguns minutos para ser processado e aparecer no perfil. <span class="en">After posting, it may take a few minutes for the content to process and be visible on your profile.</span></p>
     </div>`;
   syncTikTokPanel();
 }
@@ -300,19 +300,19 @@ function syncTikTokPanel() {
   const selfOnly = privacy.querySelector('option[value="SELF_ONLY"]');
   if (selfOnly) {
     selfOnly.disabled = branded;
-    selfOnly.title = branded ? "A visibilidade de conteúdo de marca não pode ser privada." : "";
+    selfOnly.title = branded ? "A visibilidade de conteúdo de marca não pode ser privada. / Branded content visibility cannot be set to private." : "";
   }
   if (branded && privacy.value === "SELF_ONLY") {
     privacy.value = "";
-    toast("A visibilidade de conteúdo de marca não pode ser privada.", true);
+    toast("A visibilidade de conteúdo de marca não pode ser privada. / Branded content visibility cannot be set to private.", true);
   }
   $("#tt-label-hint").textContent = !commercial ? ""
-    : branded ? "Seu vídeo será rotulado como 'Parceria paga'."
-    : organic ? "Seu vídeo será rotulado como 'Conteúdo promocional'."
-    : "Você precisa indicar se o conteúdo promove você mesmo, um terceiro ou ambos.";
+    : branded ? "Seu vídeo será rotulado como 'Parceria paga'. / Your video will be labeled as 'Paid partnership'."
+    : organic ? "Seu vídeo será rotulado como 'Conteúdo promocional'. / Your video will be labeled as 'Promotional content'."
+    : "Você precisa indicar se o conteúdo promove você mesmo, um terceiro ou ambos. / You need to indicate if your content promotes yourself, a third party, or both.";
   $("#tt-decl").innerHTML = branded
-    ? `Ao publicar, você concorda com a <a href="${TT_BRANDED}" target="_blank" rel="noopener">Branded Content Policy</a> e a <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a> do TikTok.`
-    : `Ao publicar, você concorda com a <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a> do TikTok.`;
+    ? `Ao publicar, você concorda com a <a href="${TT_BRANDED}" target="_blank" rel="noopener">Branded Content Policy</a> e a <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a> do TikTok.<br><span class="en">By posting, you agree to TikTok's <a href="${TT_BRANDED}" target="_blank" rel="noopener">Branded Content Policy</a> and <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a>.</span>`
+    : `Ao publicar, você concorda com a <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a> do TikTok.<br><span class="en">By posting, you agree to TikTok's <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a>.</span>`;
   updateApproveButtons();
 }
 
