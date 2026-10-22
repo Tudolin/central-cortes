@@ -66,7 +66,9 @@ export const tg = {
     const c = getClip(clipId);
     if (!c) return;
     try {
-      const mp4 = clipPath(c.job_id, c.id, "mp4");
+      // Prévia 720p leve; o arquivo final (bitrate alto) costuma passar do limite de 50 MB do bot.
+      const preview = clipPath(c.job_id, c.id, "preview");
+      const mp4 = existsSync(preview) ? preview : clipPath(c.job_id, c.id, "mp4");
       const jpg = clipPath(c.job_id, c.id, "jpg");
       const fd = new FormData();
       fd.set("chat_id", settings.telegram.chatId);
@@ -77,8 +79,8 @@ export const tg = {
       if (existsSync(mp4) && statSync(mp4).size < 49 * 1024 * 1024) {
         fd.set("video", await openAsBlob(mp4, { type: "video/mp4" }), "corte.mp4");
         fd.set("supports_streaming", "true");
-        fd.set("width", "1080");
-        fd.set("height", "1920");
+        fd.set("width", "720");
+        fd.set("height", "1280");
       } else {
         method = "sendPhoto";
         fd.set("photo", await openAsBlob(jpg, { type: "image/jpeg" }), "corte.jpg");

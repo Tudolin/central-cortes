@@ -248,6 +248,7 @@ const CHANNEL_FIELDS = [
   "name", "niche", "tone", "extra_instructions", "caption_template", "model", "effort", "clips_target",
   "min_duration", "max_duration", "highlight_color", "max_words_per_frame", "webhook_url",
   "schedule_slots", "publish_targets", "youtube_privacy", "youtube_category", "tiktok_mode", "tiktok_privacy",
+  "title_banner", "banner_color", "banner_text_color",
 ] as const;
 
 route("POST", "/api/channels", (_q, _r, _p, body: Partial<Channel>) => {

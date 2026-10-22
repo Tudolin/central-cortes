@@ -33,8 +33,8 @@ export const config = {
   dashboardUser: env("DASHBOARD_USER", "admin"),
   dashboardPassword: process.env.DASHBOARD_PASSWORD ?? "",
   timezone: env("TZ", "America/Sao_Paulo"),
-  /** Dias para manter mp4/proxy de cortes publicados no hub (disco do notebook é curto). */
-  retentionDays: num("RETENTION_DAYS", 14),
+  /** Dias para manter mp4/proxy/prévia de cortes publicados no hub (disco do notebook é curto; ~70 MB por corte). */
+  retentionDays: num("RETENTION_DAYS", 3),
 
   // Comunicação worker ↔ hub. Em ROLE=all o token é gerado na hora.
   hubUrl: env("HUB_URL", `http://127.0.0.1:${port}`).replace(/\/$/, ""),
@@ -56,9 +56,10 @@ export const config = {
   render: {
     vcodec: env("FFMPEG_VCODEC", "libx264"),
     preset: env("FFMPEG_PRESET", "veryfast"),
-    crf: env("FFMPEG_CRF", "21"),
+    crf: env("FFMPEG_CRF", "18"),
     fps: num("RENDER_FPS", 30),
     font: env("SUBTITLE_FONT", "Montserrat ExtraBold"),
+    titleFont: env("TITLE_FONT", "Impact"), // faixa de título: fonte condensada e pesada
     fontsDir: process.env.SUBTITLE_FONTS_DIR ?? "",
   },
 

@@ -83,7 +83,7 @@ async function processClip({ clip, job, channel }: Extract<Task, { type: "clip" 
     await report({ detail: "gerando proxy" });
     const proxy = await makeProxy(clip, dir, src.path, src.duration);
     await report({ detail: "enviando ao hub" });
-    for (const kind of ["mp4", "jpg", "proxy"] as const) {
+    for (const kind of ["mp4", "jpg", "proxy", "preview"] as const) {
       await hub("PUT", `/api/worker/clips/${clip.id}/files/${kind}`, undefined, clipFile(dir, clip.id, kind));
     }
     await hub("POST", `/api/worker/clips/${clip.id}/done`, { layout_used: layout, ...proxy });

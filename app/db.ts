@@ -112,6 +112,9 @@ addColumns("channels", {
   youtube_category: "TEXT NOT NULL DEFAULT '25'",
   tiktok_mode: "TEXT NOT NULL DEFAULT 'inbox'",
   tiktok_privacy: "TEXT NOT NULL DEFAULT 'SELF_ONLY'",
+  title_banner: "INTEGER NOT NULL DEFAULT 1",
+  banner_color: "TEXT NOT NULL DEFAULT '#D7161E'",
+  banner_text_color: "TEXT NOT NULL DEFAULT '#FFE600'",
 });
 addColumns("jobs", { worker: "TEXT NOT NULL DEFAULT ''" });
 addColumns("clips", {
@@ -157,6 +160,9 @@ export interface Channel {
   youtube_category: string;
   tiktok_mode: string;
   tiktok_privacy: string;
+  title_banner: number;
+  banner_color: string;
+  banner_text_color: string;
   created_at: string;
 }
 

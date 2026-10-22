@@ -113,7 +113,7 @@ route("POST", "/api/worker/clips/:id", (req, _r, [id], body: { detail?: string; 
 
 route("PUT", "/api/worker/clips/:id/files/:kind", async (req, _r, [id, kind]) => {
   const clip = must(getClip(+id), "Corte");
-  if (!["mp4", "jpg", "proxy"].includes(kind)) throw new HttpError(400, "Tipo inválido");
+  if (!["mp4", "jpg", "proxy", "preview"].includes(kind)) throw new HttpError(400, "Tipo inválido");
   await receiveFile(req, clipPath(clip.job_id, clip.id, kind as ClipFile));
   return { ok: true };
 }, "worker");

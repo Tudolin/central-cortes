@@ -176,7 +176,7 @@ function cleanup() {
     `SELECT * FROM clips WHERE (status = 'PUBLISHED' AND published_at < ?) OR (status = 'REJECTED' AND updated_at < datetime('now', '-2 days'))`,
     new Date(Date.now() - config.retentionDays * 86400_000).toISOString(),
   );
-  for (const c of old) removeClipFiles(c.job_id, c.id, c.status === "PUBLISHED" ? ["mp4", "proxy"] : ["mp4", "jpg", "proxy"]);
+  for (const c of old) removeClipFiles(c.job_id, c.id, c.status === "PUBLISHED" ? ["mp4", "proxy", "preview"] : ["mp4", "jpg", "proxy", "preview"]);
 }
 
 export function startScheduler() {
