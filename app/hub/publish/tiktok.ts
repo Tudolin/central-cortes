@@ -16,6 +16,7 @@ export function tiktokAuthUrl(ch: Channel, state: string): string {
     scope: scopeFor(ch.tiktok_mode),
     redirect_uri: tiktokRedirect(),
     state,
+    disable_auto_auth: "1", // sempre mostra a tela de autorização (o usuário vê a conta e as permissões)
   });
   return `https://www.tiktok.com/v2/auth/authorize/?${q}`;
 }

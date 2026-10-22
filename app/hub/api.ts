@@ -239,7 +239,7 @@ route("GET", "/api/clips/:id/tiktok", async (_q, _r, [id]) => {
 route("POST", "/api/clips/:id/unschedule", (_q, _r, [id]) => {
   const clip = must(getClip(+id), "Corte");
   if (!["SCHEDULED", "PUBLISH_FAILED"].includes(clip.status)) throw new HttpError(409, "Corte não está agendado");
-  updateClip(+id, { status: "PENDING_REVIEW", scheduled_at: null, approved_at: null, schedule_locked: 0, publish_attempts: 0 });
+  updateClip(+id, { status: "PENDING_REVIEW", scheduled_at: null, approved_at: null, schedule_locked: 0, publish_attempts: 0, tiktok_settings: null });
   rebalance(getJob(clip.job_id)!.channel_id);
   return { ok: true };
 });
