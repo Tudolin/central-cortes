@@ -4,7 +4,8 @@ import { settings } from "./settings.ts";
 import { all, get, getChannel, getClip, getJob, updateClip, type Clip, type Job, type Post } from "../db.ts";
 import { bus } from "../events.ts";
 import { clipPath } from "./media.ts";
-import { approve, reject } from "./schedule.ts";
+import { explainTikTokError, tiktokCreatorInfo, type CreatorInfo } from "./publish/tiktok.ts";
+import { approve, needsTikTokChoices, reject } from "./schedule.ts";
 
 /**
  * Bot de aprovação via long polling (não precisa de URL pública nem conflita com o webhook do ig-agent,
@@ -128,7 +129,9 @@ export const tg = {
     const lines = posts.map((p) =>
       p.platform === "tiktok" && p.status === "INBOX"
         ? "🎵 TikTok: rascunho enviado à caixa de entrada — finalize no app com a legenda abaixo"
-        : `${p.platform === "youtube" ? "▶️ YouTube" : "🎵 TikTok"}: ${p.url || "publicado"}`,
+        : p.platform === "tiktok" && !p.url
+          ? "🎵 TikTok: enviado — pode levar alguns minutos para processar e aparecer no perfil"
+          : `${p.platform === "youtube" ? "▶️ YouTube" : "🎵 TikTok"}: ${p.url || "publicado"}`,
     );
     const inbox = posts.some((p) => p.status === "INBOX");
     await send(`📤 <b>${esc(c.title)}</b>\n${lines.join("\n")}${inbox ? `\n\n<code>${esc(c.caption).slice(0, 3500)}</code>` : ""}`);
@@ -147,23 +150,125 @@ export const tg = {
   },
 };
 
-async function onCallback(q: { id: string; data?: string; message?: { chat: { id: number } } }) {
+// ---------- Escolhas do TikTok pelo Telegram (publicação direta) ----------
+// As diretrizes do TikTok exigem que, a cada post, o usuário escolha a visibilidade (sem padrão) e as
+// interações (desmarcadas por padrão) e concorde com a Music Usage Confirmation antes do envio.
+
+const PRIVACY_LABEL: Record<string, string> = {
+  PUBLIC_TO_EVERYONE: "👥 Todos",
+  MUTUAL_FOLLOW_FRIENDS: "🤝 Amigos",
+  FOLLOWER_OF_CREATOR: "👤 Seguidores",
+  SELF_ONLY: "🔒 Só eu",
+};
+const MUSIC_POLICY = "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en";
+
+interface TikTokDraft {
+  when?: string;
+  info: CreatorInfo;
+  privacy: string | null;
+  comment: boolean;
+  duet: boolean;
+  stitch: boolean;
+}
+const drafts = new Map<number, TikTokDraft>();
+
+function tiktokKeyboard(id: number, d: TikTokDraft) {
+  const nick = `TikTok: ${d.info.creator_nickname} (@${d.info.creator_username})`;
+  if (!d.privacy) {
+    return {
+      inline_keyboard: [
+        [{ text: `${nick} — quem pode ver?`, callback_data: "noop" }],
+        d.info.privacy_level_options.map((p, i) => ({ text: PRIVACY_LABEL[p] ?? p, callback_data: `tp:${id}:${i}` })),
+        [{ text: "↩ Voltar", callback_data: `tb:${id}` }],
+      ],
+    };
+  }
+  const toggle = (key: "comment" | "duet" | "stitch", label: string, disabled: boolean) =>
+    disabled
+      ? { text: `🚫 ${label} (desativado na conta)`, callback_data: "noop" }
+      : { text: `${d[key] ? "☑" : "☐"} Permitir ${label.toLowerCase()}`, callback_data: `tc:${id}:${key[0]}` };
+  return {
+    inline_keyboard: [
+      [{ text: `${nick} · ${PRIVACY_LABEL[d.privacy] ?? d.privacy} (trocar)`, callback_data: `tpc:${id}` }],
+      [toggle("comment", "Comentários", d.info.comment_disabled)],
+      [toggle("duet", "Dueto", d.info.duet_disabled), toggle("stitch", "Stitch", d.info.stitch_disabled)],
+      [{ text: "Conteúdo comercial: não (altere no Estúdio)", callback_data: "noop" }],
+      [{ text: "📄 Music Usage Confirmation do TikTok", url: MUSIC_POLICY }],
+      [{ text: `✅ ${d.when === "now" ? "Publicar agora" : "Agendar"} — concordo com a Music Usage Confirmation`, callback_data: `tok:${id}` }],
+      [{ text: "↩ Voltar", callback_data: `tb:${id}` }],
+    ],
+  };
+}
+
+async function setKeyboard(messageId: number | undefined, markup: object) {
+  if (!messageId) return;
+  await call("editMessageReplyMarkup", { chat_id: settings.telegram.chatId, message_id: messageId, reply_markup: markup }).catch(() => {});
+}
+
+async function onCallback(q: { id: string; data?: string; message?: { chat: { id: number }; message_id: number } }) {
   if (String(q.message?.chat.id) !== settings.telegram.chatId) return;
-  const [action, idStr] = (q.data ?? "").split(":");
+  const [action, idStr, arg] = (q.data ?? "").split(":");
   const id = Number(idStr);
+  const msgId = q.message?.message_id;
   let text = "";
   try {
-    if (action === "ap") text = `Agendado para ${fmtWhen(approve(id).scheduled_at)}`;
-    if (action === "now") {
-      approve(id, "now");
-      text = "Publicando agora…";
+    if (action === "ap" || action === "now") {
+      const clip = getClip(id);
+      const ch = clip && getChannel(getJob(clip.job_id)!.channel_id);
+      if (ch && needsTikTokChoices(ch)) {
+        const info = await tiktokCreatorInfo(ch).catch((e: Error) => {
+          throw new Error(explainTikTokError(e.message));
+        });
+        const d: TikTokDraft = { when: action === "now" ? "now" : undefined, info, privacy: null, comment: false, duet: false, stitch: false };
+        drafts.set(id, d);
+        await setKeyboard(msgId, tiktokKeyboard(id, d));
+        text = "Escolha as opções de publicação no TikTok";
+      } else if (action === "ap") {
+        text = `Agendado para ${fmtWhen((await approve(id)).scheduled_at)}`;
+      } else {
+        await approve(id, "now");
+        text = "Publicando agora…";
+      }
+    }
+    const d = drafts.get(id);
+    if (d && action === "tp") {
+      d.privacy = d.info.privacy_level_options[Number(arg)] ?? null;
+      await setKeyboard(msgId, tiktokKeyboard(id, d));
+    }
+    if (d && action === "tpc") {
+      d.privacy = null;
+      await setKeyboard(msgId, tiktokKeyboard(id, d));
+    }
+    if (d && action === "tc") {
+      const key = ({ c: "comment", d: "duet", s: "stitch" } as const)[arg as "c" | "d" | "s"];
+      if (key) d[key] = !d[key];
+      await setKeyboard(msgId, tiktokKeyboard(id, d));
+    }
+    if (d && action === "tok") {
+      const clip = getClip(id)!;
+      const fresh = await approve(id, d.when, {
+        title: clip.caption,
+        privacy_level: d.privacy ?? "",
+        allow_comment: d.comment,
+        allow_duet: d.duet,
+        allow_stitch: d.stitch,
+        brand_organic: false,
+        brand_content: false,
+      });
+      drafts.delete(id);
+      text = d.when === "now" ? "Publicando agora… pode levar alguns minutos para aparecer no perfil." : `Agendado para ${fmtWhen(fresh.scheduled_at)}`;
+    }
+    if (action === "tb") {
+      drafts.delete(id);
+      await setKeyboard(msgId, reviewKeyboard(id));
     }
     if (action === "rj") {
+      drafts.delete(id);
       reject(id);
       text = "Rejeitado";
     }
   } catch (e) {
-    text = (e as Error).message;
+    text = (e as Error).message.slice(0, 190);
   }
   await call("answerCallbackQuery", { callback_query_id: q.id, text }).catch(() => {});
 }

@@ -192,14 +192,14 @@ function scheduleBlock(c) {
     `<div>${PLATFORM[p.platform]}: ${p.status === "FAILED" ? `<span style="color:var(--red)">${esc(p.error)}</span>`
       : p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a>` : p.status === "INBOX" ? "rascunho na caixa de entrada do app" : "ok"}</div>`).join("");
   if (c.status === "PENDING_REVIEW") {
-    return `<div class="schedule card">
+    return `<div id="tt-panel"></div><div class="schedule card">
       <button class="btn ok" id="b-approve">Aprovar → próximo horário</button>
       <button class="btn" id="b-now">Publicar agora</button>
       <label class="muted">ou em <input type="datetime-local" id="f-when"></label><button class="btn small" id="b-at">Agendar</button>
     </div>`;
   }
   if (["SCHEDULED", "PUBLISH_FAILED"].includes(c.status)) {
-    return `<div class="schedule card">
+    return `<div id="tt-panel"></div><div class="schedule card">
       <div>${c.status === "SCHEDULED" ? `🗓 Agendado para <b>${when(c.scheduled_at)}</b>${c.schedule_locked ? " (horário fixo)" : " (próximo horário livre)"}` : "⚠️ Falha ao publicar"}</div>
       ${c.error ? `<div class="err">${esc(c.error)}</div>` : ""}
       ${postLines}
@@ -207,6 +207,7 @@ function scheduleBlock(c) {
         <button class="btn" id="b-now">Publicar agora</button>
         <label class="muted">mudar para <input type="datetime-local" id="f-when"></label><button class="btn small" id="b-at">Salvar horário</button>
         <button class="btn small" id="b-unschedule">Desagendar</button>
+        <button class="btn small" id="b-tt-save" hidden>Salvar opções do TikTok</button>
       </div>
     </div>`;
   }
@@ -214,6 +215,141 @@ function scheduleBlock(c) {
     return `<div class="schedule card"><div>${c.status === "PUBLISHING" ? "Publicando…" : `✅ Publicado em ${when(c.published_at)}`}</div>${postLines}</div>`;
   }
   return "";
+}
+
+// ---------------- Publicação direta no TikTok (diretrizes do Content Posting API) ----------------
+// Conta consultada ao vivo, privacidade sem padrão, interações desmarcadas, divulgação comercial,
+// declaração de consentimento e aviso de processamento — o que a auditoria do TikTok verifica.
+
+const TT_PRIVACY = {
+  PUBLIC_TO_EVERYONE: "Todos",
+  MUTUAL_FOLLOW_FRIENDS: "Amigos (seguidores que você segue de volta)",
+  FOLLOWER_OF_CREATOR: "Seguidores",
+  SELF_ONLY: "Somente eu",
+};
+const TT_MUSIC = "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en";
+const TT_BRANDED = "https://www.tiktok.com/legal/page/global/bc-policy/en";
+let tt = null; // { clipId, required, info, error, duration }
+
+async function loadTikTokPanel(clipId) {
+  const box = $("#tt-panel");
+  if (!box) return;
+  const data = await api(`/api/clips/${clipId}/tiktok`).catch((e) => ({ required: true, error: e.message }));
+  if (!studioCtx || studioCtx.clip.id !== clipId || !$("#tt-panel")) return;
+  tt = { clipId, ...data };
+  if (!data.required) {
+    box.innerHTML = "";
+    return updateApproveButtons();
+  }
+  const clip = studioCtx.clip;
+  const s = data.saved;
+  const info = data.info;
+  if (!info) {
+    box.innerHTML = `<div class="tt card"><b>♪ Publicar no TikTok</b><div class="err">${esc(data.error || "Não foi possível consultar a conta.")}</div>
+      <div class="muted">Sem os dados da conta não dá para publicar agora. Tente de novo em alguns minutos.</div></div>`;
+    return updateApproveButtons();
+  }
+  const tooLong = info.max_video_post_duration_sec && data.duration > info.max_video_post_duration_sec;
+  const interaction = (key, label, disabled) =>
+    `<label class="${disabled ? "off" : ""}" title="${disabled ? "Desativado nas configurações de privacidade da conta do TikTok" : ""}">
+      <input type="checkbox" id="tt-${key}" ${disabled ? "disabled" : s?.[`allow_${key}`] ? "checked" : ""}> ${label}</label>`;
+  box.innerHTML = `
+    <div class="tt card">
+      <div class="tt-head">
+        ${info.creator_avatar_url ? `<img src="${esc(info.creator_avatar_url)}" alt="">` : ""}
+        <div>Publicar no TikTok como <b>${esc(info.creator_nickname)}</b> <span class="muted">@${esc(info.creator_username)}</span></div>
+      </div>
+      ${tooLong ? `<div class="err">Este corte tem ${Math.round(data.duration)} s e a conta aceita vídeos de até ${info.max_video_post_duration_sec} s. Encurte o corte para publicar.</div>` : ""}
+      <label>Legenda no TikTok
+        <textarea id="tt-title" maxlength="2200" rows="4">${esc(s?.title ?? clip.caption)}</textarea></label>
+      <label>Quem pode ver este vídeo
+        <select id="tt-privacy">
+          <option value="" ${s ? "" : "selected"} disabled>Selecione…</option>
+          ${info.privacy_level_options.map((p) => `<option value="${p}" ${s?.privacy_level === p ? "selected" : ""}>${TT_PRIVACY[p] ?? p}</option>`).join("")}
+        </select></label>
+      <div class="tt-row">Permitir:
+        ${interaction("comment", "Comentários", info.comment_disabled)}
+        ${interaction("duet", "Dueto", info.duet_disabled)}
+        ${interaction("stitch", "Stitch", info.stitch_disabled)}
+      </div>
+      <label class="tt-switch"><input type="checkbox" id="tt-commercial" ${s?.brand_organic || s?.brand_content ? "checked" : ""}>
+        Divulgar conteúdo comercial <span class="muted">— indique se este vídeo promove uma marca, produto ou serviço</span></label>
+      <div id="tt-commercial-box" class="tt-commercial">
+        <label><input type="checkbox" id="tt-brand-organic" ${s?.brand_organic ? "checked" : ""}> <b>Sua marca</b> <span class="muted">— você está promovendo você mesmo ou o seu próprio negócio</span></label>
+        <label><input type="checkbox" id="tt-brand-content" ${s?.brand_content ? "checked" : ""}> <b>Conteúdo de marca</b> <span class="muted">— você está promovendo outra marca ou um terceiro</span></label>
+        <div id="tt-label-hint" class="tt-hint"></div>
+      </div>
+      <p id="tt-decl" class="tt-decl"></p>
+      <p class="muted" style="font-size:12px;margin:0">Depois de publicado, o vídeo pode levar alguns minutos para ser processado e aparecer no perfil.</p>
+    </div>`;
+  syncTikTokPanel();
+}
+
+/** Aplica as regras de divulgação comercial e atualiza declaração, rótulo e botões. */
+function syncTikTokPanel() {
+  if (!tt?.info || !$("#tt-panel .tt")) return updateApproveButtons();
+  const commercial = $("#tt-commercial").checked;
+  $("#tt-commercial-box").hidden = !commercial;
+  if (!commercial) {
+    $("#tt-brand-organic").checked = false;
+    $("#tt-brand-content").checked = false;
+  }
+  const organic = $("#tt-brand-organic").checked;
+  const branded = $("#tt-brand-content").checked;
+  const privacy = $("#tt-privacy");
+  const selfOnly = privacy.querySelector('option[value="SELF_ONLY"]');
+  if (selfOnly) {
+    selfOnly.disabled = branded;
+    selfOnly.title = branded ? "A visibilidade de conteúdo de marca não pode ser privada." : "";
+  }
+  if (branded && privacy.value === "SELF_ONLY") {
+    privacy.value = "";
+    toast("A visibilidade de conteúdo de marca não pode ser privada.", true);
+  }
+  $("#tt-label-hint").textContent = !commercial ? ""
+    : branded ? "Seu vídeo será rotulado como 'Parceria paga'."
+    : organic ? "Seu vídeo será rotulado como 'Conteúdo promocional'."
+    : "Você precisa indicar se o conteúdo promove você mesmo, um terceiro ou ambos.";
+  $("#tt-decl").innerHTML = branded
+    ? `Ao publicar, você concorda com a <a href="${TT_BRANDED}" target="_blank" rel="noopener">Branded Content Policy</a> e a <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a> do TikTok.`
+    : `Ao publicar, você concorda com a <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a> do TikTok.`;
+  updateApproveButtons();
+}
+
+/** null = válido; string = motivo para bloquear o envio. */
+function tiktokProblem() {
+  if (!tt?.required) return null;
+  if (!tt.info) return tt.error || "Conta do TikTok indisponível";
+  if (tt.info.max_video_post_duration_sec && tt.duration > tt.info.max_video_post_duration_sec) return "Corte mais longo que o permitido pela conta";
+  if (!$("#tt-privacy")?.value) return "Escolha quem pode ver o vídeo no TikTok";
+  if ($("#tt-commercial").checked && !$("#tt-brand-organic").checked && !$("#tt-brand-content").checked) {
+    return "Você precisa indicar se o conteúdo promove você mesmo, um terceiro ou ambos.";
+  }
+  if (!$("#tt-title").value.trim()) return "Escreva a legenda do TikTok";
+  return null;
+}
+
+function tiktokChoices() {
+  if (!tt?.required) return undefined;
+  return {
+    title: $("#tt-title").value,
+    privacy_level: $("#tt-privacy").value,
+    allow_comment: !!$("#tt-comment")?.checked,
+    allow_duet: !!$("#tt-duet")?.checked,
+    allow_stitch: !!$("#tt-stitch")?.checked,
+    brand_organic: $("#tt-brand-organic").checked,
+    brand_content: $("#tt-brand-content").checked,
+  };
+}
+
+function updateApproveButtons() {
+  const problem = tiktokProblem();
+  const save = $("#b-tt-save");
+  if (save) save.hidden = !tt?.required;
+  for (const b of $$("#b-approve, #b-now, #b-at")) {
+    b.disabled = !!problem;
+    b.title = problem || "";
+  }
 }
 
 function renderStudioMain() {
@@ -279,6 +415,8 @@ function renderStudioMain() {
       </div>
     </div>`;
   drawTrim();
+  tt = null;
+  if ($("#tt-panel")) loadTikTokPanel(fresh.id);
 }
 
 function drawTrim() {
@@ -323,8 +461,10 @@ function wireStudio() {
       seek(studioCtx.end - 2);
     }
     if (e.target.id === "f-kw") drawTrim();
+    if (e.target.id?.startsWith("tt-")) syncTikTokPanel();
   });
   box.addEventListener("change", (e) => {
+    if (e.target.id?.startsWith("tt-")) syncTikTokPanel();
     if (e.target.id === "in-start") setRange(+e.target.value, studioCtx.end);
     if (e.target.id === "in-end") setRange(studioCtx.start, +e.target.value);
   });
@@ -362,20 +502,30 @@ function wireStudio() {
       await navigator.clipboard.writeText($("#f-caption").value);
       toast("Legenda copiada");
     }
+    // O clique em Aprovar/Publicar é o consentimento explícito do envio ao TikTok, com as opções escolhidas acima.
+    if (["b-approve", "b-now", "b-at", "b-tt-save"].includes(t.id)) {
+      const problem = tiktokProblem();
+      if (problem) throw new Error(problem);
+    }
     if (t.id === "b-approve") {
-      const c = await api(`/api/clips/${id}/approve`, { method: "POST", body: {} });
+      const c = await api(`/api/clips/${id}/approve`, { method: "POST", body: { tiktok: tiktokChoices() } });
       toast(`Agendado para ${when(c.scheduled_at)}`);
       nextPending(id);
     }
     if (t.id === "b-now") {
-      await api(`/api/clips/${id}/approve`, { method: "POST", body: { when: "now" } });
-      toast("Publicando agora");
+      await api(`/api/clips/${id}/approve`, { method: "POST", body: { when: "now", tiktok: tiktokChoices() } });
+      toast(tt?.required ? "Publicando agora — pode levar alguns minutos para aparecer no perfil do TikTok" : "Publicando agora");
     }
     if (t.id === "b-at") {
       const v = $("#f-when").value;
       if (!v) throw new Error("Escolha data e hora");
-      const c = await api(`/api/clips/${id}/approve`, { method: "POST", body: { when: new Date(v).toISOString() } });
+      const c = await api(`/api/clips/${id}/approve`, { method: "POST", body: { when: new Date(v).toISOString(), tiktok: tiktokChoices() } });
       toast(`Agendado para ${when(c.scheduled_at)}`);
+    }
+    if (t.id === "b-tt-save") {
+      const c = studioCtx.clip;
+      await api(`/api/clips/${id}/approve`, { method: "POST", body: { when: c.schedule_locked ? c.scheduled_at : undefined, tiktok: tiktokChoices() } });
+      toast("Opções do TikTok salvas");
     }
     if (t.id === "b-unschedule") await api(`/api/clips/${id}/unschedule`, { method: "POST" });
     if (t.id === "b-reject") {
@@ -430,8 +580,7 @@ const CH_FIELDS = [
   ["publish_targets", "Publicar em", { targets: true, full: true }],
   ["youtube_privacy", "YouTube: visibilidade", { select: ["public", "unlisted", "private"] }],
   ["youtube_category", "YouTube: categoria", { select: [["25", "Notícias e política"], ["22", "Pessoas e blogs"], ["24", "Entretenimento"], ["27", "Educação"]] }],
-  ["tiktok_mode", "TikTok: modo", { select: [["inbox", "Rascunho na caixa de entrada (sem auditoria)"], ["direct", "Publicação direta (requer app auditado)"]] }],
-  ["tiktok_privacy", "TikTok: privacidade (modo direto)", { select: ["SELF_ONLY", "PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR"] }],
+  ["tiktok_mode", "TikTok: modo", { select: [["inbox", "Rascunho na caixa de entrada (sem auditoria)"], ["direct", "Publicação direta — visibilidade e interações escolhidas a cada aprovação (app auditado; reconecte a conta após trocar)"]] }],
   ["webhook_url", "Webhook após publicar (opcional)", { full: true }],
 ];
 
@@ -513,7 +662,7 @@ const GUIDES = {
     `Os escopos só aparecem depois que o produto correspondente é adicionado: <code>video.upload</code> e <code>video.publish</code> vêm do <b>Content Posting API</b>. Se a busca em "Add scopes" não achar, adicione o produto primeiro e clique em <b>Apply changes</b>.`,
     `Para usar já, sem esperar aprovação: crie um <b>Sandbox</b>. Ele tem configuração própria — repita nele <b>Products</b> (Login Kit + Content Posting API, com o mesmo Redirect URI) e <b>Scopes</b>, adicione sua conta em <b>Add account</b> (target users) e use as chaves do sandbox.`,
     `Copie <b>Client key</b> e <b>Client secret</b> (da tela do app ou do sandbox) para os campos abaixo e salve. Depois clique em <b>Conectar conta</b>.`,
-    `Para produção, envie o app para revisão (<b>Submit for review</b>) explicando o uso e com um vídeo curto de demonstração. Até ser auditado, postagens diretas saem privadas — por isso o padrão aqui é o rascunho na caixa de entrada.`,
+    `<b>Publicação automática (sem tocar no celular):</b> o TikTok exige auditoria do app. O Estúdio e o Telegram já têm as telas que a revisão cobra. Siga <code>docs/tiktok-auditoria.md</code> no projeto: páginas públicas de termos/privacidade, app de produção com Direct Post, roteiro do vídeo de demonstração e os textos do formulário. Até ser auditado, postagens diretas saem privadas — por isso o padrão é o rascunho na caixa de entrada.`,
   ],
 };
 

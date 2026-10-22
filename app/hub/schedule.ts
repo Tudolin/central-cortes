@@ -5,7 +5,7 @@ import { all, get, getChannel, getClip, getJob, run, updateClip, type Channel, t
 import { bus } from "../events.ts";
 import { buildResult } from "../pipeline/caption.ts";
 import { clipPath, removeClipFiles } from "./media.ts";
-import { tiktokUpload } from "./publish/tiktok.ts";
+import { explainTikTokError, tiktokCreatorInfo, tiktokUpload, validateTikTokSettings, type TikTokPostSettings } from "./publish/tiktok.ts";
 import { youtubeUpload } from "./publish/youtube.ts";
 import { tg } from "./telegram.ts";
 
@@ -53,10 +53,27 @@ export function rebalance(channelId: string) {
 }
 
 /** Aprovação vinda do dashboard ou do Telegram. `when` = horário manual (trava) ou "now". */
-export function approve(clipId: number, when?: string) {
+/** O canal publica direto no TikTok: cada aprovação precisa das escolhas do usuário para aquele post. */
+export const needsTikTokChoices = (ch: Channel) => ch.tiktok_mode === "direct" && targetsOf(ch).includes("tiktok");
+
+/**
+ * Aprovação vinda do dashboard ou do Telegram. `when` = horário manual (trava) ou "now".
+ * `tiktok` = escolhas de publicação no TikTok (sem elas, mantém as já registradas no corte).
+ */
+export async function approve(clipId: number, when?: string, tiktok?: Omit<TikTokPostSettings, "consent_at">) {
   const clip = getClip(clipId);
   if (!clip || !["PENDING_REVIEW", "SCHEDULED", "PUBLISH_FAILED"].includes(clip.status)) throw new Error("Corte não está pronto para aprovação");
   const job = getJob(clip.job_id)!;
+  const ch = getChannel(job.channel_id)!;
+  let tiktokSettings = clip.tiktok_settings;
+  if (tiktok) tiktokSettings = JSON.stringify({ ...tiktok, consent_at: new Date().toISOString() } satisfies TikTokPostSettings);
+  if (needsTikTokChoices(ch)) {
+    const info = await tiktokCreatorInfo(ch).catch((e: Error) => {
+      throw new Error(explainTikTokError(e.message));
+    });
+    const invalid = validateTikTokSettings(tiktokSettings ? JSON.parse(tiktokSettings) : null, info, clip.end_s - clip.start_s);
+    if (invalid) throw new Error(invalid);
+  }
   const manual = when === "now" ? new Date(Date.now() + 5_000).toISOString() : when ? new Date(when).toISOString() : null;
   updateClip(clipId, {
     status: "SCHEDULED",
@@ -64,6 +81,7 @@ export function approve(clipId: number, when?: string) {
     scheduled_at: manual,
     schedule_locked: manual ? 1 : 0,
     publish_attempts: 0,
+    tiktok_settings: tiktokSettings,
     error: "",
   });
   rebalance(job.channel_id);

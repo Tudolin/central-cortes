@@ -126,6 +126,9 @@ addColumns("clips", {
   schedule_locked: "INTEGER NOT NULL DEFAULT 0",
   publish_attempts: "INTEGER NOT NULL DEFAULT 0",
   tg_message_id: "INTEGER NOT NULL DEFAULT 0",
+  // Escolhas do usuário para a publicação direta no TikTok (privacidade, interações, divulgação comercial),
+  // registradas no momento da aprovação — exigência das diretrizes do Content Posting API.
+  tiktok_settings: "TEXT",
 });
 db.exec(`
 CREATE INDEX IF NOT EXISTS clips_status ON clips(status);
@@ -214,6 +217,7 @@ export interface Clip {
   schedule_locked: number;
   publish_attempts: number;
   tg_message_id: number;
+  tiktok_settings: string | null;
   published_at: string | null;
   updated_at: string;
 }

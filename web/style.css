@@ -194,6 +194,21 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .integ label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 .integ .help { font-size: 12px; line-height: 1.4; }
 .integ .conn { background: var(--panel); justify-content: space-between; }
+/* Painel de publicação no TikTok */
+.tt { display: grid; gap: 10px; border-left: 3px solid #25f4ee; }
+.tt-head { display: flex; gap: 10px; align-items: center; }
+.tt-head img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+.tt label { display: grid; gap: 4px; font-size: 13px; }
+.tt-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; font-size: 13px; }
+.tt-row label, .tt-switch, .tt-commercial label { display: flex !important; gap: 6px; align-items: center; }
+.tt-row label.off { opacity: .45; }
+.tt-commercial { display: grid; gap: 6px; padding-left: 22px; }
+.tt-commercial[hidden] { display: none; }
+.tt-hint { font-size: 12px; color: var(--accent); }
+.tt-decl { font-size: 12px; margin: 0; }
+.tt-decl a { color: var(--blue); }
+.tt .err { color: var(--red); font-size: 13px; }
+
 .guide { background: var(--panel); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; }
 .guide summary { cursor: pointer; font-weight: 700; color: var(--accent); }
 .guide ol { margin: 10px 0 4px; padding-left: 20px; display: grid; gap: 8px; line-height: 1.45; }

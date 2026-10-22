@@ -8,9 +8,9 @@ import { HttpError, must, route, serveFile } from "../http.ts";
 import { buildResult, renderCaption } from "../pipeline/caption.ts";
 import type { Transcript } from "../pipeline/transcribe.ts";
 import { clipPath, jobMediaDir, transcriptPath } from "./media.ts";
-import { tiktokAuthUrl, tiktokConnect, tiktokRedirect } from "./publish/tiktok.ts";
+import { explainTikTokError, tiktokAuthUrl, tiktokConnect, tiktokCreatorInfo, tiktokRedirect, type TikTokPostSettings } from "./publish/tiktok.ts";
 import { youtubeAuthUrl, youtubeConnect, youtubeRedirect } from "./publish/youtube.ts";
-import { approve, rebalance, reject } from "./schedule.ts";
+import { approve, needsTikTokChoices, rebalance, reject } from "./schedule.ts";
 import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
 import { chatCandidates, telegramBotInfo, telegramTest, tg } from "./telegram.ts";
 
@@ -213,11 +213,25 @@ route("PATCH", "/api/clips/:id", (_q, _r, [id], body: Partial<Clip> & { keywords
   return getClip(+id);
 });
 
-route("POST", "/api/clips/:id/approve", (_q, _r, [id], body?: { when?: string }) => {
+route("POST", "/api/clips/:id/approve", async (_q, _r, [id], body?: { when?: string; tiktok?: Omit<TikTokPostSettings, "consent_at"> }) => {
   try {
-    return approve(+id, body?.when);
+    return await approve(+id, body?.when, body?.tiktok);
   } catch (e) {
     throw new HttpError(409, (e as Error).message);
+  }
+});
+
+/** Dados da conta do TikTok para o painel de publicação (consultados ao vivo a cada abertura). */
+route("GET", "/api/clips/:id/tiktok", async (_q, _r, [id]) => {
+  const clip = must(getClip(+id), "Corte");
+  const ch = getChannel(getJob(clip.job_id)!.channel_id)!;
+  if (!needsTikTokChoices(ch)) return { required: false };
+  const saved = clip.tiktok_settings ? JSON.parse(clip.tiktok_settings) : null;
+  try {
+    const info = await tiktokCreatorInfo(ch);
+    return { required: true, info, saved, duration: clip.end_s - clip.start_s };
+  } catch (e) {
+    return { required: true, error: explainTikTokError((e as Error).message), saved };
   }
 });
 
