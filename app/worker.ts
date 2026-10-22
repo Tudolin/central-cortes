@@ -99,7 +99,15 @@ export async function startWorker() {
   setInterval(() => hub("POST", "/api/worker/heartbeat", { task: currentTask }).catch(() => {}), 30_000);
 
   let hubDown = false;
+  let greeted = false;
   for (;;) {
+    if (!greeted) {
+      greeted = await hub("POST", "/api/worker/hello", {}).then(() => true, () => false);
+      if (!greeted) {
+        await sleep(30_000);
+        continue;
+      }
+    }
     let task: Task;
     try {
       task = await hub<Task>("POST", "/api/worker/claim", {});

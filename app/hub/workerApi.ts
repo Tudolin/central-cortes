@@ -25,6 +25,19 @@ function heartbeat(worker: string, task = "") {
 
 const workerOf = (req: IncomingMessage) => String(req.headers["x-worker"] ?? "worker").slice(0, 60);
 
+/** Worker acabou de iniciar: o que estava atribuído a ele ficou pela metade e volta para a fila. */
+route("POST", "/api/worker/hello", (req) => {
+  const worker = workerOf(req);
+  heartbeat(worker);
+  for (const j of all<Job>("SELECT * FROM jobs WHERE worker = ? AND status IN ('DOWNLOADING','TRANSCRIBING','ANALYZING')", worker)) {
+    updateJob(j.id, { status: "QUEUED", detail: "worker reiniciou; voltou para a fila" });
+  }
+  for (const c of all<Clip>("SELECT * FROM clips WHERE worker = ? AND status = 'RENDERING'", worker)) {
+    updateClip(c.id, { status: "RENDER_QUEUED", detail: "worker reiniciou" });
+  }
+  return { ok: true };
+}, "worker");
+
 route("POST", "/api/worker/heartbeat", (req, _r, _p, body: { task?: string }) => {
   heartbeat(workerOf(req), body?.task ?? "");
   return { ok: true };

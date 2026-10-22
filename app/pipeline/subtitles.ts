@@ -19,6 +19,9 @@ export interface BannerOptions {
   seed: number; // borda "pincelada" determinística por corte
 }
 
+const BANNER_SECONDS = 2;
+const BANNER_FADE = 500; // ms
+
 /** Quebra o título em linhas equilibradas de até `max` caracteres. */
 function wrapTitle(title: string, max: number): string[] {
   const lines: string[] = [];
@@ -77,10 +80,12 @@ function bannerEvents(b: BannerOptions): string[] {
   const shape = `m ${pts[0][0]} ${pts[0][1]} l ${pts.slice(1).map(([x, y]) => `${x} ${y}`).join(" ")}`;
 
   const rot = `\\org(540,${Math.round(b.centerY)})\\frz2`;
-  const end = assTime(b.duration + 1);
+  // Só a abertura: 2 s visível + 0,5 s de fade out. O quadro de 1,5 s (miniatura/capa) ainda mostra o título.
+  const end = assTime(Math.min(b.duration, BANNER_SECONDS + BANNER_FADE / 1000));
+  const fade = `\\fad(0,${BANNER_FADE})`;
   return [
-    `Dialogue: 0,0:00:00.00,${end},BannerBox,,0,0,0,,{\\an7\\pos(0,0)${rot}\\c${assColor(b.color)}\\bord0\\shad8\\4a&H80&\\p1}${shape}{\\p0}`,
-    `Dialogue: 1,0:00:00.00,${end},BannerText,,0,0,0,,{\\an5\\pos(540,${Math.round(b.centerY + 4)})${rot}\\fs${size}}${lines.join("\\N")}`,
+    `Dialogue: 0,0:00:00.00,${end},BannerBox,,0,0,0,,{\\an7\\pos(0,0)${rot}${fade}\\c${assColor(b.color)}\\bord0\\shad8\\4a&H80&\\p1}${shape}{\\p0}`,
+    `Dialogue: 1,0:00:00.00,${end},BannerText,,0,0,0,,{\\an5\\pos(540,${Math.round(b.centerY + 4)})${rot}${fade}\\fs${size}}${lines.join("\\N")}`,
   ];
 }
 

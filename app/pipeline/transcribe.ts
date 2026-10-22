@@ -36,26 +36,42 @@ export async function transcribe(dir: string, sourcePath: string, onProgress: (m
   onProgress("extraindo áudio");
   await exec(config.bin.ffmpeg, ["-y", "-v", "error", "-i", sourcePath, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav]);
 
-  onProgress("whisper 0%");
   const base = join(dir, "whisper");
-  await exec(
-    config.bin.whisper,
-    [
-      "-m", config.whisperModel,
-      "-f", wav,
-      "-l", config.whisperLanguage,
-      "-t", String(config.whisperThreads),
-      "-ml", "1", "-sow", // um segmento por palavra
-      "-oj", "-of", base,
-      "-pp",
-    ],
-    {
-      onStderr: (line) => {
-        const m = line.match(/progress\s*=\s*(\d+)%/);
-        if (m) onProgress(`whisper ${m[1]}%`);
+  const run = (label: string, extra: string[]) => {
+    onProgress(`${label} 0%`);
+    return exec(
+      config.bin.whisper,
+      [
+        "-m", config.whisperModel,
+        "-f", wav,
+        "-l", config.whisperLanguage,
+        "-t", String(config.whisperThreads),
+        "-ml", "1", "-sow", // um segmento por palavra
+        "-oj", "-of", base,
+        "-pp",
+        ...extra,
+      ],
+      {
+        onStderr: (line) => {
+          const m = line.match(/progress\s*=\s*(\d+)%/);
+          if (m) onProgress(`${label} ${m[1]}%`);
+        },
       },
-    },
-  );
+    );
+  };
+  // Falhas de alocação (VRAM ou memória virtual do Windows no limite) costumam ser momentâneas:
+  // tenta de novo na GPU e, se insistir, termina na CPU — mais lento, mas não perde o job.
+  try {
+    await run("whisper", []);
+  } catch (first) {
+    console.error(`[whisper] GPU falhou, tentando de novo: ${(first as Error).message.split("\n")[1] ?? ""}`);
+    await new Promise((r) => setTimeout(r, 15_000));
+    try {
+      await run("whisper (2ª tentativa)", []);
+    } catch {
+      await run("whisper na CPU", ["-ng"]);
+    }
+  }
 
   const raw = JSON.parse(readFileSync(`${base}.json`, "utf8")) as {
     transcription: { offsets: { from: number; to: number }; text: string }[];
