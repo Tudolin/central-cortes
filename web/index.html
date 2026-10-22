@@ -16,6 +16,7 @@
       <button data-tab="channels">Canais</button>
       <button data-tab="costs">Custos</button>
     </nav>
+    <span id="worker-status" class="worker off"><i></i>worker</span>
     <select id="channel-filter" aria-label="Filtrar canal"></select>
   </header>
 
@@ -37,6 +38,7 @@
         <aside class="studio-list">
           <div class="seg" id="studio-filter">
             <button data-f="PENDING_REVIEW" class="active">Pendentes</button>
+            <button data-f="SCHEDULED">Agenda</button>
             <button data-f="PUBLISHED">Publicados</button>
             <button data-f="ALL">Todos</button>
           </div>

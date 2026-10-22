@@ -69,7 +69,7 @@ main { padding: 20px; }
 .new-job textarea { flex: 1; resize: vertical; min-height: 38px; }
 
 /* ---------- Kanban ---------- */
-.kanban { display: grid; grid-template-columns: repeat(6, minmax(200px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 8px; }
+.kanban { display: grid; grid-template-columns: repeat(7, minmax(190px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 8px; }
 .col { background: var(--panel); border-top: 4px solid var(--c, var(--line)); min-height: 300px; border-radius: 0 0 var(--radius) var(--radius); }
 .col h3 {
   margin: 0; padding: 12px; font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
@@ -165,6 +165,26 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .daily div { flex: 1; background: var(--accent); min-height: 2px; position: relative; }
 .daily div:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #000; padding: 4px 6px; white-space: nowrap; font-size: 11px; border: 1px solid var(--line); }
 .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin: 20px 0 8px; }
+
+/* ---------- Worker / agenda / conexões ---------- */
+.worker { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.worker i { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; }
+.worker.on i { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.tag.bad { border-color: var(--red); color: var(--red); }
+.schedule { display: grid; gap: 8px; padding: 12px; }
+.schedule.card { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.schedule > div { flex-basis: 100%; }
+.schedule .actions { flex-basis: 100%; }
+.schedule .err { color: var(--red); font-size: 12px; white-space: pre-wrap; }
+.schedule label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+.conns { display: grid; gap: 8px; }
+.conn { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--panel-2); padding: 10px; border-radius: var(--radius); }
+.conn b { min-width: 100px; }
+.ok-dot { color: var(--green); font-size: 13px; }
+.ok-dot::before { content: "● "; }
+.checks { display: flex; gap: 16px; padding: 6px 0; }
+.checks label { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 14px; }
+.source-video.empty { display: grid; place-items: center; }
 
 #toast {
   position: fixed; bottom: 20px; right: 20px; background: #000; border: 1px solid var(--accent);

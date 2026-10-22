@@ -9,7 +9,15 @@ import { probeVideo } from "./source.ts";
 import { buildAss, clipWords, emphasisTimes } from "./subtitles.ts";
 import type { Transcript } from "./transcribe.ts";
 
-export const clipFile = (dir: string, clipId: number, ext: "mp4" | "jpg" | "ass") => join(dir, `clip-${clipId}.${ext}`);
+export const clipFile = (dir: string, clipId: number, ext: "mp4" | "jpg" | "ass" | "proxy") =>
+  join(dir, ext === "proxy" ? `clip-${clipId}.proxy.mp4` : `clip-${clipId}.${ext}`);
+
+/** NVENC usa presets p1–p7 e -cq no lugar de -crf. */
+function videoCodecArgs(): string[] {
+  const { vcodec, preset, crf } = config.render;
+  if (vcodec.includes("nvenc")) return ["-c:v", vcodec, "-preset", /^p[1-7]$/.test(preset) ? preset : "p5", "-rc", "vbr", "-cq", crf, "-b:v", "0"];
+  return ["-c:v", vcodec, "-preset", preset, "-crf", crf];
+}
 
 /** Reframe + legendas + zoom + loudnorm em uma única passada de ffmpeg. */
 export async function renderClip(clip: Clip, ch: Channel, dir: string, sourcePath: string, transcript: Transcript, onProgress: (msg: string) => void): Promise<LayoutUsed> {
@@ -55,7 +63,7 @@ export async function renderClip(clip: Clip, ch: Channel, dir: string, sourcePat
       "-ss", clip.start_s.toFixed(3), "-t", duration.toFixed(3), "-i", sourcePath,
       "-filter_complex", graph,
       "-map", "[v]", "-map", "0:a:0?",
-      "-c:v", config.render.vcodec, "-preset", config.render.preset, "-crf", config.render.crf,
+      ...videoCodecArgs(),
       "-pix_fmt", "yuv420p", "-r", String(fps),
       "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
       "-movflags", "+faststart",
@@ -71,4 +79,21 @@ export async function renderClip(clip: Clip, ch: Channel, dir: string, sourcePat
   );
   await exec(config.bin.ffmpeg, ["-y", "-v", "error", "-ss", "1.5", "-i", out, "-frames:v", "1", "-vf", "scale=360:-2", "-q:v", "4", `clip-${clip.id}.jpg`], { cwd: dir });
   return plan.layout;
+}
+
+/**
+ * Proxy leve (360p) do trecho original com 60 s de folga de cada lado: é o que o Estúdio usa para o
+ * ajuste fino de início/fim, já que o hub não guarda o vídeo-fonte.
+ */
+export async function makeProxy(clip: Clip, dir: string, sourcePath: string, sourceDuration: number) {
+  const proxy_start = Math.max(0, Math.floor(clip.start_s - 60));
+  const proxy_end = Math.min(sourceDuration || clip.end_s + 60, Math.ceil(clip.end_s + 60));
+  await exec(config.bin.ffmpeg, [
+    "-y", "-v", "error",
+    "-ss", String(proxy_start), "-t", String(proxy_end - proxy_start), "-i", sourcePath,
+    "-vf", "scale=-2:360", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
+    "-c:a", "aac", "-b:a", "64k", "-ac", "1", "-movflags", "+faststart",
+    clipFile(dir, clip.id, "proxy"),
+  ]);
+  return { proxy_start, proxy_end };
 }

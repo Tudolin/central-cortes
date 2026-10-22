@@ -18,7 +18,9 @@
   },
   "license": "ISC",
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.1.0",
+    "@anthropic-ai/sdk": "^1.1.0"
+  },
+  "optionalDependencies": {
     "onnxruntime-node": "^1.30.0"
   },
   "devDependencies": {

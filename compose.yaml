@@ -1,0 +1,17 @@
+services:
+  cortes-hub:
+    build: .
+    image: cortes-hub:local
+    container_name: cortes-hub
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROLE: hub
+      PORT: "8095"
+      DATA_DIR: /app/data
+    ports:
+      # Local (Tailscale Serve faz o https) + IP do Tailscale (o worker do PC chega por aqui).
+      - "127.0.0.1:8095:8095"
+      - "${TAILSCALE_IP:-127.0.0.1}:8095:8095"
+    volumes:
+      - ./data:/app/data

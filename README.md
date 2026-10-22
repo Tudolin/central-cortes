@@ -3,9 +3,51 @@
 Plataforma self-hosted que transforma vídeos longos (podcasts, debates, lives) em cortes verticais 9:16 prontos para TikTok, Shorts e Reels — com curadoria por IA, reframe com rastreio de rosto, legendas estilo Hormozi e um dashboard de aprovação.
 
 ```
-URL/arquivo ─► yt-dlp ─► ffmpeg+whisper.cpp ─► Claude (curadoria) ─► YuNet+ffmpeg (reframe+legenda) ─► revisão ─► publicado
-   Na Fila        │        Transcrevendo          Análise de IA          Renderizando FFmpeg        Pendente      Publicado
+URL/arquivo ─► yt-dlp ─► ffmpeg+whisper.cpp ─► Claude (curadoria) ─► YuNet+ffmpeg (reframe+legenda) ─► revisão ─► agenda ─► YouTube/TikTok
+   Na Fila        │        Transcrevendo          Análise de IA          Renderizando FFmpeg        Pendente    Agendado     Publicado
 ```
+
+## Hub + worker (PC pesado, notebook 24h)
+
+O mesmo código roda em dois papéis, escolhidos por `ROLE` no `.env`:
+
+| | **Hub** (`ROLE=hub`, notebook Debian, Docker) | **Worker** (`ROLE=worker`, PC com GPU) |
+|---|---|---|
+| Faz | banco, dashboard, aprovação (web + Telegram), agenda, upload para YouTube/TikTok, limpeza de disco | download, transcrição, IA, reframe, render NVENC, proxy para o Estúdio |
+| Guarda | cortes finais, thumbs, proxies (360p), transcrições | vídeo-fonte e arquivos intermediários |
+| Precisa de | Docker | ffmpeg, yt-dlp, whisper.cpp, `ANTHROPIC_API_KEY` |
+
+O worker **puxa** tarefas do hub (`/api/worker/*`, autenticado por `WORKER_TOKEN`) pelo Tailscale: o hub nunca precisa alcançar o PC. Com o PC desligado, a fila só espera; se o PC cair no meio de uma tarefa, o hub a devolve para a fila após 3 minutos sem sinal. `ROLE=all` (padrão) roda os dois papéis num processo só.
+
+### Subir o hub (notebook)
+
+```bash
+cd ~/editor-cortes && docker compose up -d --build
+```
+
+Dashboard com https pelo Tailscale (uma vez, exige sudo):
+
+```bash
+sudo tailscale serve --bg --https=10004 http://127.0.0.1:8095
+```
+
+### Rodar o worker (PC)
+
+```bash
+npm install
+```
+
+```bash
+node app/main.ts
+```
+
+### Agenda e publicação
+
+- Aprovar (no Estúdio ou no botão do Telegram) coloca o corte no **próximo horário livre** do canal (`schedule_slots`, ex. `12:00,18:30,21:00`, fuso `TZ`). Cortes aprovados são redistribuídos por score: o melhor sai primeiro. Também dá para fixar data/hora ou publicar na hora.
+- **YouTube Shorts**: upload resumable via YouTube Data API (OAuth por canal; cota padrão ≈ 6 uploads/dia por projeto Google).
+- **TikTok**: modo `inbox` (padrão) envia como rascunho para a caixa de entrada do app — sem auditoria do app, é o único modo que fica público; você finaliza no celular e o Telegram manda a legenda pronta para colar. Modo `direct` publica direto, mas o TikTok só libera visibilidade pública depois de auditar o app.
+- Falha de publicação tenta de novo em 5, 20 e 60 min; plataformas que já deram certo não são repetidas.
+- **Telegram**: crie um bot novo no @BotFather, mande qualquer mensagem para ele (o bot responde com o seu chat id) e preencha `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`. Comandos: `/status`, `/agenda`.
 
 ## Por que essa stack
 

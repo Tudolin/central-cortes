@@ -71,13 +71,62 @@ CREATE TABLE IF NOT EXISTS clips (
   published_at TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Uma linha por (corte, plataforma): evita republicar onde já deu certo quando outra plataforma falha.
+CREATE TABLE IF NOT EXISTS posts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL,
+  status TEXT NOT NULL,             -- OK | INBOX | FAILED
+  external_id TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (clip_id, platform)
+);
+
+CREATE TABLE IF NOT EXISTS workers (
+  name TEXT PRIMARY KEY,
+  last_seen TEXT NOT NULL,
+  task TEXT NOT NULL DEFAULT ''
+);
+`);
+
+/** Migração aditiva: colunas novas em bancos já existentes. */
+function addColumns(table: string, defs: Record<string, string>) {
+  const have = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+  for (const [name, def] of Object.entries(defs)) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+}
+addColumns("channels", {
+  schedule_slots: "TEXT NOT NULL DEFAULT '12:00,18:30,21:00'",
+  publish_targets: `TEXT NOT NULL DEFAULT '["youtube","tiktok"]'`,
+  youtube_privacy: "TEXT NOT NULL DEFAULT 'public'",
+  youtube_category: "TEXT NOT NULL DEFAULT '25'",
+  tiktok_mode: "TEXT NOT NULL DEFAULT 'inbox'",
+  tiktok_privacy: "TEXT NOT NULL DEFAULT 'SELF_ONLY'",
+});
+addColumns("jobs", { worker: "TEXT NOT NULL DEFAULT ''" });
+addColumns("clips", {
+  worker: "TEXT NOT NULL DEFAULT ''",
+  proxy_start: "REAL NOT NULL DEFAULT 0",
+  proxy_end: "REAL NOT NULL DEFAULT 0",
+  approved_at: "TEXT",
+  scheduled_at: "TEXT",
+  schedule_locked: "INTEGER NOT NULL DEFAULT 0",
+  publish_attempts: "INTEGER NOT NULL DEFAULT 0",
+  tg_message_id: "INTEGER NOT NULL DEFAULT 0",
+});
+db.exec(`
 CREATE INDEX IF NOT EXISTS clips_status ON clips(status);
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
 `);
 
 export type JobStatus = "QUEUED" | "DOWNLOADING" | "TRANSCRIBING" | "ANALYZING" | "RENDERING" | "DONE" | "FAILED";
-export type ClipStatus = "RENDER_QUEUED" | "RENDERING" | "PENDING_REVIEW" | "PUBLISHED" | "REJECTED" | "FAILED";
+export type ClipStatus =
+  | "RENDER_QUEUED" | "RENDERING" | "PENDING_REVIEW" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "PUBLISH_FAILED" | "REJECTED" | "FAILED";
 export type Layout = "single_speaker" | "split_screen" | "screen_share_focus";
+export type Platform = "youtube" | "tiktok";
 
 export interface Channel {
   id: string;
@@ -95,6 +144,12 @@ export interface Channel {
   max_words_per_frame: number;
   webhook_url: string;
   credentials: string;
+  schedule_slots: string;
+  publish_targets: string;
+  youtube_privacy: string;
+  youtube_category: string;
+  tiktok_mode: string;
+  tiktok_privacy: string;
   created_at: string;
 }
 
@@ -115,6 +170,7 @@ export interface Job {
   tokens_cache_read: number;
   tokens_cache_write: number;
   cost_usd: number;
+  worker: string;
   created_at: string;
   updated_at: string;
 }
@@ -136,8 +192,28 @@ export interface Clip {
   status: ClipStatus;
   detail: string;
   error: string;
+  worker: string;
+  proxy_start: number;
+  proxy_end: number;
   rendered_at: string | null;
+  approved_at: string | null;
+  scheduled_at: string | null;
+  schedule_locked: number;
+  publish_attempts: number;
+  tg_message_id: number;
   published_at: string | null;
+  updated_at: string;
+}
+
+export interface Post {
+  id: number;
+  clip_id: number;
+  platform: Platform;
+  status: "OK" | "INBOX" | "FAILED";
+  external_id: string;
+  url: string;
+  error: string;
+  attempts: number;
   updated_at: string;
 }
 
@@ -145,7 +221,7 @@ export const all = <T>(sql: string, ...params: SQLInputValue[]) => db.prepare(sq
 export const get = <T>(sql: string, ...params: SQLInputValue[]) => db.prepare(sql).get(...params) as unknown as T | undefined;
 export const run = (sql: string, ...params: SQLInputValue[]) => db.prepare(sql).run(...params);
 
-/** UPDATE parcial com whitelist implícita: só colunas passadas em `fields`. */
+/** UPDATE parcial: só as colunas passadas em `fields`. Nomes de coluna vêm sempre de código, nunca do cliente. */
 function patch(table: "jobs" | "clips" | "channels", id: number | string, fields: Record<string, SQLInputValue>) {
   const keys = Object.keys(fields);
   if (!keys.length) return;
@@ -161,6 +237,16 @@ export const updateChannel = (id: string, fields: Partial<Record<keyof Channel, 
 export const getJob = (id: number) => get<Job>("SELECT * FROM jobs WHERE id = ?", id);
 export const getClip = (id: number) => get<Clip>("SELECT * FROM clips WHERE id = ?", id);
 export const getChannel = (id: string) => get<Channel>("SELECT * FROM channels WHERE id = ?", id);
+
+export const credentialsOf = (ch: Channel) => JSON.parse(ch.credentials || "{}") as Record<string, string>;
+export function setCredentials(id: string, patchCreds: Record<string, string | null>) {
+  const cur = credentialsOf(getChannel(id)!);
+  for (const [k, v] of Object.entries(patchCreds)) {
+    if (v) cur[k] = v;
+    else delete cur[k];
+  }
+  updateChannel(id, { credentials: JSON.stringify(cur) });
+}
 
 const DEFAULT_TEMPLATE = `🎙️ {titulo_corte}
 Corte do canal Ideias em Comum — debates, análises e ideias que a mídia não pauta.

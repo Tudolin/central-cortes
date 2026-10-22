@@ -4,7 +4,7 @@ import { config } from "../config.ts";
 import { exec } from "../proc.ts";
 
 export const jobDir = (jobId: number) => {
-  const dir = join(config.mediaDir, `job-${jobId}`);
+  const dir = join(config.workDir, `job-${jobId}`);
   mkdirSync(dir, { recursive: true });
   return dir;
 };

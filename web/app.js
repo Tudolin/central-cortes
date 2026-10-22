@@ -10,8 +10,11 @@ const hms = (s) => {
 };
 const usd = (n) => `$${(n || 0).toFixed(n >= 1 ? 2 : 4)}`;
 const fmtN = (n) => (n || 0).toLocaleString("pt-BR");
+const when = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+const PLATFORM = { youtube: "▶ YouTube", tiktok: "♪ TikTok" };
 
-let state = { channels: [], jobs: [], clips: [], costs: [], daily: [] };
+let state = { channels: [], jobs: [], clips: [], posts: [], costs: [], daily: [], workers: [], integrations: {} };
 const ui = {
   tab: localStorage.getItem("tab") || "pipeline",
   channel: localStorage.getItem("channel") || "",
@@ -36,7 +39,7 @@ function toast(msg, err = false) {
   t.textContent = msg;
   t.className = `show${err ? " err" : ""}`;
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => (t.className = ""), 3500);
+  toast.timer = setTimeout(() => (t.className = ""), 4000);
 }
 
 const act = (fn) => async (...a) => {
@@ -56,6 +59,7 @@ const byChannel = (x) => !ui.channel || x.channel_id === ui.channel;
 const jobsF = () => state.jobs.filter(byChannel);
 const clipsF = () => state.clips.filter(byChannel);
 const channelName = (id) => state.channels.find((c) => c.id === id)?.name ?? id;
+const postsOf = (clipId) => state.posts.filter((p) => p.clip_id === clipId);
 
 // ---------------- Pipeline / Kanban ----------------
 
@@ -65,6 +69,7 @@ const COLUMNS = [
   { key: "ai", title: "Análise de IA", color: "#b47cff", jobs: ["ANALYZING"] },
   { key: "render", title: "Renderizando FFmpeg", color: "#ff8a3d", clips: ["RENDER_QUEUED", "RENDERING"] },
   { key: "review", title: "Pendente de Aprovação", color: "#ffd700", clips: ["PENDING_REVIEW"] },
+  { key: "sched", title: "Agendado", color: "#4dd8ff", clips: ["SCHEDULED", "PUBLISHING"] },
   { key: "done", title: "Publicado", color: "#3ddc84", clips: ["PUBLISHED"] },
 ];
 
@@ -75,10 +80,11 @@ function pct(detail) {
 
 function jobCard(j) {
   const p = pct(j.detail);
+  const label = j.detail || (j.status === "QUEUED" ? "" : j.status.toLowerCase());
   return `<div class="kcard">
     <div class="t">${esc(j.title || j.source)}</div>
-    <div class="meta"><span class="tag">${esc(channelName(j.channel_id))}</span>#${j.id}${j.duration ? ` · ${hms(j.duration)}` : ""}</div>
-    ${j.detail ? `<div class="detail"><span class="spin"></span> ${esc(j.detail)}</div>` : j.status === "QUEUED" ? "" : `<div class="detail"><span class="spin"></span> ${esc(j.status.toLowerCase())}</div>`}
+    <div class="meta"><span class="tag">${esc(channelName(j.channel_id))}</span>#${j.id}${j.duration ? ` · ${hms(j.duration)}` : ""}${j.worker && j.status !== "QUEUED" ? ` · ${esc(j.worker)}` : ""}</div>
+    ${label ? `<div class="detail"><span class="spin"></span> ${esc(label)}</div>` : ""}
     ${p != null ? `<div class="bar"><i style="width:${p}%"></i></div>` : ""}
   </div>`;
 }
@@ -86,14 +92,18 @@ function jobCard(j) {
 function clipCard(c) {
   const thumb = c.rendered_at ? `<img src="/media/clip/${c.id}.jpg?v=${encodeURIComponent(c.rendered_at)}" alt="" loading="lazy" />` : "";
   const p = pct(c.detail);
+  const posts = postsOf(c.id);
   return `<div class="kcard clickable" data-clip="${c.id}">
     <div class="thumb">${thumb}<div style="display:grid;gap:6px;align-content:start">
       <div class="t">${esc(c.title)}</div>
       <div class="meta"><span class="score">${c.score}</span>${hms(c.end_s - c.start_s)}<span class="tag">${esc(c.layout_used || c.layout)}</span></div>
+      ${c.status === "SCHEDULED" ? `<div class="meta">🗓 ${when(c.scheduled_at)}${c.schedule_locked ? " 🔒" : ""}</div>` : ""}
+      ${c.status === "PUBLISHING" ? `<div class="detail"><span class="spin"></span> publicando…</div>` : ""}
+      ${posts.length && c.status === "PUBLISHED" ? `<div class="meta">${posts.map((p) => `<span class="tag ${p.status === "FAILED" ? "bad" : ""}">${PLATFORM[p.platform]}${p.status === "INBOX" ? " (rascunho)" : ""}</span>`).join("")}</div>` : ""}
     </div></div>
     ${c.status === "RENDERING" ? `<div class="detail"><span class="spin"></span> ${esc(c.detail || "renderizando")}</div>` : ""}
     ${p != null && c.status === "RENDERING" ? `<div class="bar"><i style="width:${p}%"></i></div>` : ""}
-    ${c.error ? `<div class="detail" style="color:var(--red)">${esc(c.error)}</div>` : ""}
+    ${c.error && c.status === "SCHEDULED" ? `<div class="detail" style="color:var(--red)">nova tentativa: ${esc(c.error)}</div>` : ""}
   </div>`;
 }
 
@@ -101,36 +111,60 @@ function renderPipeline() {
   const jobs = jobsF();
   const clips = clipsF();
   $("#kanban").innerHTML = COLUMNS.map((col) => {
-    const items = col.jobs
-      ? jobs.filter((j) => col.jobs.includes(j.status)).reverse().map(jobCard)
-      : clips.filter((c) => col.clips.includes(c.status)).sort((a, b) => b.score - a.score).slice(0, col.key === "done" ? 30 : 200).map(clipCard);
-    return `<div class="col" style="--c:${col.color}"><h3>${col.title}<b>${items.length}</b></h3><div class="cards">${items.join("") || ""}</div></div>`;
+    let items;
+    if (col.jobs) items = jobs.filter((j) => col.jobs.includes(j.status)).reverse().map(jobCard);
+    else {
+      let list = clips.filter((c) => col.clips.includes(c.status));
+      if (col.key === "sched") list.sort((a, b) => (a.scheduled_at || "").localeCompare(b.scheduled_at || ""));
+      else if (col.key === "done") list.sort((a, b) => (b.published_at || "").localeCompare(a.published_at || "")).splice(30);
+      else list.sort((a, b) => b.score - a.score);
+      items = list.map(clipCard);
+    }
+    return `<div class="col" style="--c:${col.color}"><h3>${col.title}<b>${items.length}</b></h3><div class="cards">${items.join("")}</div></div>`;
   }).join("");
 
   const failedJobs = jobs.filter((j) => j.status === "FAILED");
-  const failedClips = clips.filter((c) => c.status === "FAILED");
+  const failedClips = clips.filter((c) => c.status === "FAILED" || c.status === "PUBLISH_FAILED");
   $("#failures").innerHTML =
     failedJobs.length + failedClips.length
       ? `<div class="section-title">Falhas</div>` +
         failedJobs.map((j) => `<div class="card fail"><b>Job #${j.id}</b><span>${esc(j.title || j.source)}</span><div class="err">${esc(j.error)}</div>
           <button class="btn small" data-retry="${j.id}">Tentar de novo</button><button class="btn small danger" data-del="${j.id}">Excluir</button></div>`).join("") +
-        failedClips.map((c) => `<div class="card fail"><b>Corte #${c.id}</b><span>${esc(c.title)}</span><div class="err">${esc(c.error)}</div>
-          <button class="btn small" data-rerender="${c.id}">Renderizar de novo</button></div>`).join("")
+        failedClips.map((c) => `<div class="card fail"><b>${c.status === "FAILED" ? "Render" : "Publicação"} · corte #${c.id}</b><span>${esc(c.title)}</span><div class="err">${esc(c.error)}</div>
+          ${c.status === "FAILED"
+            ? `<button class="btn small" data-rerender="${c.id}">Renderizar de novo</button>`
+            : `<button class="btn small" data-republish="${c.id}">Publicar de novo</button>`}
+          <button class="btn small" data-clip-open="${c.id}">Abrir</button></div>`).join("")
       : "";
+}
+
+function renderWorkers() {
+  const online = state.workers.filter((w) => Date.now() - Date.parse(w.last_seen) < 120_000);
+  const el = $("#worker-status");
+  el.className = `worker ${online.length ? "on" : "off"}`;
+  el.title = state.workers.map((w) => `${w.name}: visto ${when(w.last_seen)} ${w.task ? "— " + w.task : ""}`).join("\n") || "Nenhum worker conectou ainda";
+  el.innerHTML = online.length
+    ? `<i></i>${online.map((w) => esc(w.name)).join(", ")}${online.some((w) => w.task) ? " · trabalhando" : " · ocioso"}`
+    : `<i></i>worker offline`;
 }
 
 // ---------------- Estúdio ----------------
 
-let studioCtx = null; // { clip, words, bounds, lo, hi, start, end }
+let studioCtx = null; // { clip, words, bounds, lo, hi, start, end, proxyStart }
 
 function renderClipList() {
+  const match = (c) =>
+    ui.studioFilter === "ALL" ? true : ui.studioFilter === "SCHEDULED" ? ["SCHEDULED", "PUBLISHING", "PUBLISH_FAILED"].includes(c.status) : c.status === ui.studioFilter;
   const list = clipsF()
-    .filter((c) => ui.studioFilter === "ALL" ? c.status !== "REJECTED" : c.status === ui.studioFilter)
-    .sort((a, b) => (ui.studioFilter === "PUBLISHED" ? (b.published_at || "").localeCompare(a.published_at || "") : b.score - a.score));
+    .filter(match)
+    .sort((a, b) =>
+      ui.studioFilter === "PUBLISHED" ? (b.published_at || "").localeCompare(a.published_at || "")
+      : ui.studioFilter === "SCHEDULED" ? (a.scheduled_at || "").localeCompare(b.scheduled_at || "")
+      : b.score - a.score);
   $("#clip-list").innerHTML =
     list.map((c) => `<li data-clip="${c.id}" class="${c.id === ui.clipId ? "sel" : ""}">
       ${c.rendered_at ? `<img src="/media/clip/${c.id}.jpg?v=${encodeURIComponent(c.rendered_at)}" alt="" loading="lazy" />` : `<img alt="" />`}
-      <div><div class="t">${esc(c.title)}</div><div class="meta muted" style="font-size:12px;margin-top:4px"><span class="score">${c.score}</span> ${hms(c.end_s - c.start_s)} · ${esc(c.status)}</div></div>
+      <div><div class="t">${esc(c.title)}</div><div class="meta muted" style="font-size:12px;margin-top:4px"><span class="score">${c.score}</span> ${hms(c.end_s - c.start_s)} · ${c.status === "SCHEDULED" ? "🗓 " + when(c.scheduled_at) : esc(c.status)}</div></div>
     </li>`).join("") || `<p class="empty">Nada aqui.</p>`;
   const pending = state.clips.filter((c) => c.status === "PENDING_REVIEW").length;
   const pill = $("#pending-count");
@@ -144,13 +178,42 @@ async function openClip(id) {
   render();
   const clip = state.clips.find((c) => c.id === id);
   if (!clip) return;
-  const pad = 45;
-  const lo = Math.max(0, clip.start_s - pad);
-  const job = state.jobs.find((j) => j.id === clip.job_id);
-  const hi = Math.min(job?.duration || clip.end_s + pad, clip.end_s + pad);
+  const hasProxy = clip.proxy_end > clip.proxy_start;
+  const lo = Math.max(hasProxy ? clip.proxy_start : 0, clip.start_s - 45);
+  const hi = Math.min(hasProxy ? clip.proxy_end : clip.end_s + 45, clip.end_s + 45);
   const tr = await api(`/api/clips/${id}/transcript?start=${lo}&end=${hi}`);
-  studioCtx = { clip, words: tr.words, bounds: tr.sentenceBounds, lo, hi, start: clip.start_s, end: clip.end_s };
+  studioCtx = { clip, words: tr.words, bounds: tr.sentenceBounds, lo, hi, start: clip.start_s, end: clip.end_s, proxyStart: clip.proxy_start, hasProxy };
   renderStudioMain();
+}
+
+function scheduleBlock(c) {
+  const posts = postsOf(c.id);
+  const postLines = posts.map((p) =>
+    `<div>${PLATFORM[p.platform]}: ${p.status === "FAILED" ? `<span style="color:var(--red)">${esc(p.error)}</span>`
+      : p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a>` : p.status === "INBOX" ? "rascunho na caixa de entrada do app" : "ok"}</div>`).join("");
+  if (c.status === "PENDING_REVIEW") {
+    return `<div class="schedule card">
+      <button class="btn ok" id="b-approve">Aprovar → próximo horário</button>
+      <button class="btn" id="b-now">Publicar agora</button>
+      <label class="muted">ou em <input type="datetime-local" id="f-when"></label><button class="btn small" id="b-at">Agendar</button>
+    </div>`;
+  }
+  if (["SCHEDULED", "PUBLISH_FAILED"].includes(c.status)) {
+    return `<div class="schedule card">
+      <div>${c.status === "SCHEDULED" ? `🗓 Agendado para <b>${when(c.scheduled_at)}</b>${c.schedule_locked ? " (horário fixo)" : " (próximo horário livre)"}` : "⚠️ Falha ao publicar"}</div>
+      ${c.error ? `<div class="err">${esc(c.error)}</div>` : ""}
+      ${postLines}
+      <div class="actions">
+        <button class="btn" id="b-now">Publicar agora</button>
+        <label class="muted">mudar para <input type="datetime-local" id="f-when"></label><button class="btn small" id="b-at">Salvar horário</button>
+        <button class="btn small" id="b-unschedule">Desagendar</button>
+      </div>
+    </div>`;
+  }
+  if (["PUBLISHED", "PUBLISHING"].includes(c.status)) {
+    return `<div class="schedule card"><div>${c.status === "PUBLISHING" ? "Publicando…" : `✅ Publicado em ${when(c.published_at)}`}</div>${postLines}</div>`;
+  }
+  return "";
 }
 
 function renderStudioMain() {
@@ -160,16 +223,14 @@ function renderStudioMain() {
   const fresh = state.clips.find((c) => c.id === clip.id) || clip;
   studioCtx.clip = fresh;
   const kw = JSON.parse(fresh.keywords || "[]");
-  const rendered = fresh.rendered_at && ["PENDING_REVIEW", "PUBLISHED"].includes(fresh.status);
+  const rendered = fresh.rendered_at && !["RENDER_QUEUED", "RENDERING", "FAILED"].includes(fresh.status);
+  const v = encodeURIComponent(fresh.rendered_at || "");
 
   box.innerHTML = `
     <div>
-      <div class="phone">${rendered ? `<video src="/media/clip/${fresh.id}.mp4?v=${encodeURIComponent(fresh.rendered_at)}" controls playsinline></video>` : `<p class="empty">${fresh.status === "FAILED" ? "Falhou: " + esc(fresh.error) : "Renderizando…<br>" + esc(fresh.detail || "")}</p>`}</div>
+      <div class="phone">${rendered ? `<video src="/media/clip/${fresh.id}.mp4?v=${v}" controls playsinline></video>` : `<p class="empty">${fresh.status === "FAILED" ? "Falhou: " + esc(fresh.error) : "Renderizando…<br>" + esc(fresh.detail || "")}</p>`}</div>
       <div class="actions" style="margin-top:10px">
-        ${fresh.status === "PUBLISHED"
-          ? `<button class="btn" id="b-unpub">Voltar p/ revisão</button>`
-          : `<button class="btn ok" id="b-approve" ${fresh.status === "PENDING_REVIEW" ? "" : "disabled"}>Aprovar e publicar</button>`}
-        <button class="btn danger" id="b-reject">Rejeitar</button>
+        ${!["PUBLISHED", "PUBLISHING"].includes(fresh.status) ? `<button class="btn danger" id="b-reject">Rejeitar</button>` : ""}
         ${rendered ? `<a class="btn" href="/media/clip/${fresh.id}.mp4?download">Baixar</a>` : ""}
       </div>
     </div>
@@ -179,20 +240,23 @@ function renderStudioMain() {
         <a class="muted" href="/api/jobs/${fresh.job_id}/result" target="_blank">JSON do job</a></div>
       <h2>${esc(fresh.title)}</h2>
       <div class="muted">${esc(fresh.hook)}</div>
+      ${scheduleBlock(fresh)}
 
-      <video class="source-video" id="src-video" src="/media/source/${fresh.job_id}#t=${studioCtx.start.toFixed(2)}" preload="metadata" muted></video>
+      ${studioCtx.hasProxy
+        ? `<video class="source-video" id="src-video" src="/media/clip/${fresh.id}.proxy.mp4?v=${v}#t=${(studioCtx.start - studioCtx.proxyStart).toFixed(2)}" preload="metadata" muted></video>`
+        : `<div class="source-video empty">Prévia do original disponível após o primeiro render.</div>`}
       <div class="trim">
         <div class="trim-track" id="track"></div>
         <div class="trim-row">
-          <label>Início <input type="number" step="0.1" id="in-start" value="${studioCtx.start.toFixed(2)}"></label>
+          <label>Início <input type="number" step="0.1" id="in-start"></label>
           <button class="btn small" data-nudge="start:-0.5">−0.5s</button><button class="btn small" data-nudge="start:0.5">+0.5s</button>
-          <label>Fim <input type="number" step="0.1" id="in-end" value="${studioCtx.end.toFixed(2)}"></label>
+          <label>Fim <input type="number" step="0.1" id="in-end"></label>
           <button class="btn small" data-nudge="end:-0.5">−0.5s</button><button class="btn small" data-nudge="end:0.5">+0.5s</button>
           <span class="mono" id="dur"></span>
-          <button class="btn small" id="b-play">▶ Tocar trecho</button>
+          <button class="btn small" id="b-play" ${studioCtx.hasProxy ? "" : "disabled"}>▶ Tocar trecho</button>
         </div>
-        <input type="range" id="r-start" min="${lo}" max="${hi}" step="0.05" value="${studioCtx.start}" aria-label="Início">
-        <input type="range" id="r-end" min="${lo}" max="${hi}" step="0.05" value="${studioCtx.end}" aria-label="Fim">
+        <input type="range" id="r-start" min="${lo}" max="${hi}" step="0.05" aria-label="Início">
+        <input type="range" id="r-end" min="${lo}" max="${hi}" step="0.05" aria-label="Fim">
         <div class="words" id="words"></div>
         <div class="muted" style="font-size:12px">Clique numa palavra para mover o início (clique) ou o fim (Shift+clique).</div>
       </div>
@@ -205,10 +269,10 @@ function renderStudioMain() {
           </select></label>
         <label>Zoom em ênfases <select id="f-zoom"><option value="1" ${fresh.zoom ? "selected" : ""}>Sim</option><option value="0" ${fresh.zoom ? "" : "selected"}>Não</option></select></label>
         <label class="full">Palavras em destaque (vírgula)<input id="f-kw" value="${esc(kw.join(", "))}"></label>
-        <label class="full">Legenda social <textarea id="f-caption">${esc(fresh.caption)}</textarea></label>
+        <label class="full">Legenda social (descrição no YouTube, legenda no TikTok) <textarea id="f-caption">${esc(fresh.caption)}</textarea></label>
       </div>
       <div class="actions">
-        <button class="btn primary" id="b-save">Salvar e re-renderizar</button>
+        <button class="btn primary" id="b-save" ${["PUBLISHED", "PUBLISHING"].includes(fresh.status) ? "disabled" : ""}>Salvar e re-renderizar</button>
         <button class="btn" id="b-save-caption">Salvar só a legenda</button>
         <button class="btn" id="b-copy">Copiar legenda</button>
         <span class="muted" style="align-self:center">Layout usado no render: <b>${esc(fresh.layout_used || "—")}</b></span>
@@ -235,15 +299,18 @@ function drawTrim() {
   $("#r-end").value = c.end;
 }
 
-const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+/** O proxy começa em proxyStart: o tempo do player é relativo a ele. */
+function seek(t) {
+  const v = $("#src-video");
+  if (v && studioCtx.hasProxy) v.currentTime = Math.max(0, t - studioCtx.proxyStart);
+}
 
 function setRange(start, end) {
   const c = studioCtx;
   c.start = Math.max(c.lo, Math.min(start, c.end - 1));
   c.end = Math.min(c.hi, Math.max(end, c.start + 1));
   drawTrim();
-  const v = $("#src-video");
-  if (v) v.currentTime = c.start;
+  seek(c.start);
 }
 
 function wireStudio() {
@@ -251,7 +318,10 @@ function wireStudio() {
   box.addEventListener("input", (e) => {
     if (!studioCtx) return;
     if (e.target.id === "r-start") setRange(+e.target.value, studioCtx.end);
-    if (e.target.id === "r-end") { setRange(studioCtx.start, +e.target.value); $("#src-video").currentTime = studioCtx.end - 2; }
+    if (e.target.id === "r-end") {
+      setRange(studioCtx.start, +e.target.value);
+      seek(studioCtx.end - 2);
+    }
     if (e.target.id === "f-kw") drawTrim();
   });
   box.addEventListener("change", (e) => {
@@ -274,7 +344,7 @@ function wireStudio() {
     if (t.id === "b-play") {
       const v = $("#src-video");
       v.muted = false;
-      v.currentTime = studioCtx.start;
+      seek(studioCtx.start);
       v.play();
     }
     if (t.id === "b-save") {
@@ -282,7 +352,7 @@ function wireStudio() {
         start_s: studioCtx.start, end_s: studioCtx.end, title: $("#f-title").value, layout: $("#f-layout").value,
         zoom: $("#f-zoom").value === "1", keywords: $("#f-kw").value, rerender: true,
       } });
-      toast("Salvo — re-renderizando");
+      toast("Salvo — re-renderizando no worker");
     }
     if (t.id === "b-save-caption") {
       await api(`/api/clips/${id}`, { method: "PATCH", body: { caption: $("#f-caption").value } });
@@ -293,24 +363,34 @@ function wireStudio() {
       toast("Legenda copiada");
     }
     if (t.id === "b-approve") {
-      await api(`/api/clips/${id}/approve`, { method: "POST" });
-      toast("Publicado");
+      const c = await api(`/api/clips/${id}/approve`, { method: "POST", body: {} });
+      toast(`Agendado para ${when(c.scheduled_at)}`);
       nextPending(id);
     }
-    if (t.id === "b-unpub") await api(`/api/clips/${id}/unpublish`, { method: "POST" });
+    if (t.id === "b-now") {
+      await api(`/api/clips/${id}/approve`, { method: "POST", body: { when: "now" } });
+      toast("Publicando agora");
+    }
+    if (t.id === "b-at") {
+      const v = $("#f-when").value;
+      if (!v) throw new Error("Escolha data e hora");
+      const c = await api(`/api/clips/${id}/approve`, { method: "POST", body: { when: new Date(v).toISOString() } });
+      toast(`Agendado para ${when(c.scheduled_at)}`);
+    }
+    if (t.id === "b-unschedule") await api(`/api/clips/${id}/unschedule`, { method: "POST" });
     if (t.id === "b-reject") {
       await api(`/api/clips/${id}/reject`, { method: "POST" });
       toast("Rejeitado");
       nextPending(id);
     }
   }));
-  // Para no fim do trecho e move a agulha.
   box.addEventListener("timeupdate", (e) => {
     if (e.target.id !== "src-video" || !studioCtx) return;
     const v = e.target;
+    const abs = v.currentTime + studioCtx.proxyStart;
     const head = $("#head");
-    if (head) head.style.left = `${((v.currentTime - studioCtx.lo) / (studioCtx.hi - studioCtx.lo)) * 100}%`;
-    if (!v.paused && v.currentTime >= studioCtx.end) v.pause();
+    if (head) head.style.left = `${((abs - studioCtx.lo) / (studioCtx.hi - studioCtx.lo)) * 100}%`;
+    if (!v.paused && abs >= studioCtx.end) v.pause();
   }, true);
 }
 
@@ -333,53 +413,94 @@ const CH_FIELDS = [
   ["tone", "Tom de voz", { area: true, full: true }],
   ["extra_instructions", "Instruções extras para a IA", { area: true, full: true }],
   ["h", "Curadoria"],
-  ["model", "Modelo Claude (vazio = padrão do servidor)", { list: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] }],
+  ["model", "Modelo Claude (vazio = padrão do worker)", { list: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] }],
   ["effort", "Esforço (low…max, vazio = padrão)", { list: ["low", "medium", "high", "xhigh", "max"] }],
   ["clips_target", "Máx. cortes por vídeo", { type: "number" }],
   ["min_duration", "Duração mínima (s)", { type: "number" }],
   ["max_duration", "Duração máxima (s)", { type: "number" }],
-  ["h", "Legendas & publicação"],
+  ["h", "Legendas"],
   ["highlight_color", "Cor de destaque", { type: "color" }],
   ["max_words_per_frame", "Palavras por quadro (2–4)", { type: "number" }],
   ["caption_template", "Template de legenda social — {titulo_corte} {url_com_timestamp} {url_video_original} {timestamp_segundos}", { area: true, full: true, rows: 10 }],
-  ["webhook_url", "Webhook ao aprovar (n8n, Make, script de upload…)", { full: true }],
+  ["h", "Agenda e publicação"],
+  ["schedule_slots", "Horários diários (HH:MM separados por vírgula)", { full: true }],
+  ["publish_targets", "Publicar em", { targets: true, full: true }],
+  ["youtube_privacy", "YouTube: visibilidade", { select: ["public", "unlisted", "private"] }],
+  ["youtube_category", "YouTube: categoria", { select: [["25", "Notícias e política"], ["22", "Pessoas e blogs"], ["24", "Entretenimento"], ["27", "Educação"]] }],
+  ["tiktok_mode", "TikTok: modo", { select: [["inbox", "Rascunho na caixa de entrada (sem auditoria)"], ["direct", "Publicação direta (requer app auditado)"]] }],
+  ["tiktok_privacy", "TikTok: privacidade (modo direto)", { select: ["SELF_ONLY", "PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR"] }],
+  ["webhook_url", "Webhook após publicar (opcional)", { full: true }],
 ];
+
+function fieldInput(k, o, ch) {
+  const raw = ch[k] ?? "";
+  if (o.targets) {
+    const sel = JSON.parse(raw || "[]");
+    return `<div class="checks">${Object.entries(PLATFORM).map(([p, label]) => `<label><input type="checkbox" name="target_${p}" ${sel.includes(p) ? "checked" : ""}> ${label}</label>`).join("")}</div>`;
+  }
+  if (o.select) {
+    return `<select name="${k}">${o.select.map((x) => {
+      const [val, label] = Array.isArray(x) ? x : [x, x];
+      return `<option value="${val}" ${String(raw) === val ? "selected" : ""}>${esc(label)}</option>`;
+    }).join("")}</select>`;
+  }
+  if (o.area) return `<textarea name="${k}" rows="${o.rows || 3}">${esc(raw)}</textarea>`;
+  const ro = o.readonlyExisting && ch.id ? "readonly" : "";
+  const list = o.list ? `list="dl-${k}"` : "";
+  return `<input name="${k}" value="${esc(raw)}" type="${o.type || "text"}" ${ro} ${list}>${o.list ? `<datalist id="dl-${k}">${o.list.map((x) => `<option value="${x}">`).join("")}</datalist>` : ""}`;
+}
+
+function connectionsBlock(ch) {
+  if (!ch.id) return "";
+  const integ = state.integrations;
+  const row = (p) => {
+    const acct = ch.connections?.[p];
+    const ready = integ[p];
+    return `<div class="conn">
+      <b>${PLATFORM[p]}</b>
+      ${acct ? `<span class="ok-dot">conectado: ${esc(acct)}</span>` : `<span class="muted">não conectado</span>`}
+      ${ready
+        ? `<a class="btn small" href="/oauth/${p}/start?channel=${encodeURIComponent(ch.id)}">${acct ? "Reconectar" : "Conectar"}</a>`
+        : `<span class="muted" style="font-size:12px">configure ${p === "youtube" ? "YOUTUBE_CLIENT_ID/SECRET" : "TIKTOK_CLIENT_KEY/SECRET"} e PUBLIC_URL no .env do hub</span>`}
+      ${acct ? `<button class="btn small danger" type="button" data-disconnect="${p}">Desconectar</button>` : ""}
+    </div>`;
+  };
+  return `<h3>Contas conectadas</h3><div class="full conns">${row("youtube")}${row("tiktok")}
+    <div class="conn"><b>✈ Telegram</b>${integ.telegram ? `<span class="ok-dot">bot ativo</span>` : `<span class="muted">configure TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID no .env do hub</span>`}</div></div>`;
+}
 
 function renderChannels() {
   $("#channel-list").innerHTML = state.channels.map((c) => `<li data-ch="${esc(c.id)}" class="${c.id === ui.channelId ? "sel" : ""}"><b>${esc(c.name)}</b><div class="muted mono">${esc(c.id)}</div></li>`).join("");
   if (ui.channelId === null && state.channels[0]) ui.channelId = state.channels[0].id;
-  const ch = state.channels.find((c) => c.id === ui.channelId) || (ui.channelId === "" ? { id: "", name: "", credentials: [] } : null);
+  const ch = state.channels.find((c) => c.id === ui.channelId) || (ui.channelId === "" ? { id: "", name: "", credentials: [], publish_targets: '["youtube","tiktok"]', schedule_slots: "12:00,18:30,21:00" } : null);
   const form = $("#channel-form");
   if (!ch) return (form.innerHTML = "");
   if (form.dataset.for === ch.id && form.contains(document.activeElement)) return; // não sobrescreve enquanto edita
   form.dataset.for = ch.id;
   form.innerHTML =
-    CH_FIELDS.map(([k, label, o = {}]) => {
-      if (k === "h") return `<h3>${label}</h3>`;
-      const v = esc(ch[k] ?? "");
-      const ro = o.readonlyExisting && ch.id ? "readonly" : "";
-      const listId = o.list ? `dl-${k}` : "";
-      const input = o.area
-        ? `<textarea name="${k}" rows="${o.rows || 3}">${v}</textarea>`
-        : `<input name="${k}" value="${v}" type="${o.type || "text"}" ${ro} ${listId ? `list="${listId}"` : ""}>${o.list ? `<datalist id="${listId}">${o.list.map((x) => `<option value="${x}">`).join("")}</datalist>` : ""}`;
-      return `<label class="${o.full ? "full" : ""}">${label}${input}</label>`;
-    }).join("") +
-    `<h3>Credenciais (isoladas por canal, somente escrita)</h3>
+    CH_FIELDS.map(([k, label, o = {}]) => (k === "h" ? `<h3>${label}</h3>` : `<label class="${o.full ? "full" : ""}">${label}${fieldInput(k, o, ch)}</label>`)).join("") +
+    connectionsBlock(ch) +
+    `<h3>Outras credenciais (somente escrita)</h3>
      <div class="full muted" style="font-size:12px">Salvas: ${ch.credentials.length ? ch.credentials.map(esc).join(", ") : "nenhuma"}. Para remover, envie a chave com valor vazio.</div>
-     <div class="full cred-row"><input name="cred_key" placeholder="chave (ex.: youtube_refresh_token)"><input name="cred_val" placeholder="valor" type="password"></div>
+     <div class="full cred-row"><input name="cred_key" placeholder="chave"><input name="cred_val" placeholder="valor" type="password"></div>
      <div class="full actions"><button class="btn primary" type="submit">${ch.id ? "Salvar canal" : "Criar canal"}</button></div>`;
 }
 
 async function saveChannelForm(e) {
   e.preventDefault();
-  const fd = Object.fromEntries(new FormData(e.target));
+  const form = e.target;
+  const fd = Object.fromEntries(new FormData(form));
   const body = {};
-  for (const [k, , o = {}] of CH_FIELDS) if (k !== "h" && fd[k] !== undefined) body[k] = o.type === "number" ? Number(fd[k]) : fd[k];
+  for (const [k, , o = {}] of CH_FIELDS) {
+    if (k === "h") continue;
+    if (o.targets) body.publish_targets = JSON.stringify(Object.keys(PLATFORM).filter((p) => fd[`target_${p}`]));
+    else if (fd[k] !== undefined) body[k] = o.type === "number" ? Number(fd[k]) : fd[k];
+  }
   if (fd.cred_key) body.credentials = { [fd.cred_key]: fd.cred_val };
-  const isNew = !e.target.dataset.for;
-  const saved = await api(isNew ? "/api/channels" : `/api/channels/${encodeURIComponent(e.target.dataset.for)}`, { method: isNew ? "POST" : "PUT", body });
+  const isNew = !form.dataset.for;
+  const saved = await api(isNew ? "/api/channels" : `/api/channels/${encodeURIComponent(form.dataset.for)}`, { method: isNew ? "POST" : "PUT", body });
   ui.channelId = saved.id;
-  e.target.dataset.for = "";
+  form.dataset.for = "";
   toast("Canal salvo");
   await refresh();
 }
@@ -432,14 +553,14 @@ function render() {
   jobSel.innerHTML = opts;
   jobSel.value = prev || ui.channel || state.channels[0]?.id || "";
 
+  renderWorkers();
   renderPipeline();
   renderClipList();
   if (ui.tab === "studio" && studioCtx) {
-    // Re-render só se o corte mudou de status/render (evita resetar o player enquanto o usuário edita).
     const fresh = state.clips.find((c) => c.id === studioCtx.clip.id);
-    if (fresh && (fresh.status !== studioCtx.clip.status || fresh.rendered_at !== studioCtx.clip.rendered_at || fresh.detail !== studioCtx.clip.detail)) {
-      if (!$("#studio-main").contains(document.activeElement)) renderStudioMain();
-    }
+    const prev = studioCtx.clip;
+    if (fresh && fresh.rendered_at !== prev.rendered_at) openClip(fresh.id); // novo render = novo proxy/intervalo
+    else if (fresh && ["status", "detail", "scheduled_at", "error"].some((k) => fresh[k] !== prev[k]) && !$("#studio-main").contains(document.activeElement)) renderStudioMain();
   }
   if (ui.tab === "channels") renderChannels();
   if (ui.tab === "costs") renderCosts();
@@ -466,12 +587,19 @@ $("#new-job").addEventListener("submit", act(async (e) => {
   toast(`${ids.length} vídeo(s) na fila`);
 }));
 document.addEventListener("click", act(async (e) => {
-  const card = e.target.closest("[data-clip]");
-  if (card && (card.closest("#kanban") || card.closest("#clip-list"))) return openClip(+card.dataset.clip);
   const t = e.target;
+  const card = t.closest("[data-clip]");
+  if (card && (card.closest("#kanban") || card.closest("#clip-list"))) return openClip(+card.dataset.clip);
+  if (t.dataset.clipOpen) return openClip(+t.dataset.clipOpen);
   if (t.dataset.retry) await api(`/api/jobs/${t.dataset.retry}/retry`, { method: "POST" });
   if (t.dataset.del && confirm("Excluir o job e todos os arquivos dele?")) await api(`/api/jobs/${t.dataset.del}`, { method: "DELETE" });
   if (t.dataset.rerender) await api(`/api/clips/${t.dataset.rerender}/rerender`, { method: "POST" });
+  if (t.dataset.republish) await api(`/api/clips/${t.dataset.republish}/approve`, { method: "POST", body: { when: "now" } });
+  if (t.dataset.disconnect && confirm("Desconectar esta conta do canal?")) {
+    await api(`/api/channels/${encodeURIComponent(ui.channelId)}/disconnect/${t.dataset.disconnect}`, { method: "POST" });
+    $("#channel-form").dataset.for = "-";
+    await refresh();
+  }
   const chItem = t.closest("#channel-list li");
   if (chItem) {
     ui.channelId = chItem.dataset.ch;
@@ -494,10 +622,29 @@ $("#studio-filter").addEventListener("click", (e) => {
 $("#channel-form").addEventListener("submit", act(saveChannelForm));
 wireStudio();
 
+/** Links vindos do Telegram (#clip=ID) e retorno do OAuth (#channels:plataforma:mensagem). */
+function handleHash() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (!h) return;
+  history.replaceState(null, "", location.pathname);
+  const clip = h.match(/^clip=(\d+)$/);
+  if (clip) return openClip(+clip[1]);
+  const oauth = h.match(/^channels:(\w+):(.*)$/s);
+  if (oauth) {
+    ui.tab = "channels";
+    render();
+    toast(oauth[2] === "ok" ? `${PLATFORM[oauth[1]] ?? oauth[1]} conectado` : oauth[2], oauth[2] !== "ok");
+  }
+}
+
 function connect() {
   const es = new EventSource("/api/events");
   es.onmessage = () => refresh().catch(() => {});
   es.onerror = () => {}; // EventSource reconecta sozinho
 }
 
-refresh().then(connect).catch((e) => toast(e.message, true));
+refresh().then(() => {
+  connect();
+  handleHash();
+  setInterval(renderWorkers, 30_000);
+}).catch((e) => toast(e.message, true));
