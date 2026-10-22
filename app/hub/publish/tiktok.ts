@@ -1,9 +1,9 @@
 import { open, stat } from "node:fs/promises";
-import { config } from "../../config.ts";
+import { settings } from "../settings.ts";
 import { credentialsOf, getChannel, setCredentials, type Channel, type Clip } from "../../db.ts";
 
 const API = "https://open.tiktokapis.com/v2";
-export const tiktokRedirect = () => `${config.publicUrl}/oauth/tiktok/callback`;
+export const tiktokRedirect = () => `${settings.publicUrl}/oauth/tiktok/callback`;
 
 // inbox  = envia como rascunho para a caixa de entrada do app (escopo video.upload, funciona sem auditoria)
 // direct = publica direto (escopo video.publish; sem auditoria do app só aceita SELF_ONLY)
@@ -11,7 +11,7 @@ const scopeFor = (mode: string) => (mode === "direct" ? "user.info.basic,video.p
 
 export function tiktokAuthUrl(ch: Channel, state: string): string {
   const q = new URLSearchParams({
-    client_key: config.tiktok.clientKey,
+    client_key: settings.tiktok.clientKey,
     response_type: "code",
     scope: scopeFor(ch.tiktok_mode),
     redirect_uri: tiktokRedirect(),
@@ -33,7 +33,7 @@ async function tokenRequest(params: Record<string, string>): Promise<Required<Pi
   const r = await fetch(`${API}/oauth/token/`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_key: config.tiktok.clientKey, client_secret: config.tiktok.clientSecret, ...params }),
+    body: new URLSearchParams({ client_key: settings.tiktok.clientKey, client_secret: settings.tiktok.clientSecret, ...params }),
   });
   const t = (await r.json()) as TokenResponse;
   if (!t.access_token || !t.refresh_token) throw new Error(`TikTok OAuth: ${t.error_description || t.error || r.status}`);

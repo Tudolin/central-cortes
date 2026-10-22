@@ -450,23 +450,149 @@ function fieldInput(k, o, ch) {
   return `<input name="${k}" value="${esc(raw)}" type="${o.type || "text"}" ${ro} ${list}>${o.list ? `<datalist id="dl-${k}">${o.list.map((x) => `<option value="${x}">`).join("")}</datalist>` : ""}`;
 }
 
-function connectionsBlock(ch) {
-  if (!ch.id) return "";
-  const integ = state.integrations;
-  const row = (p) => {
-    const acct = ch.connections?.[p];
-    const ready = integ[p];
-    return `<div class="conn">
-      <b>${PLATFORM[p]}</b>
-      ${acct ? `<span class="ok-dot">conectado: ${esc(acct)}</span>` : `<span class="muted">não conectado</span>`}
-      ${ready
-        ? `<a class="btn small" href="/oauth/${p}/start?channel=${encodeURIComponent(ch.id)}">${acct ? "Reconectar" : "Conectar"}</a>`
-        : `<span class="muted" style="font-size:12px">configure ${p === "youtube" ? "YOUTUBE_CLIENT_ID/SECRET" : "TIKTOK_CLIENT_KEY/SECRET"} e PUBLIC_URL no .env do hub</span>`}
-      ${acct ? `<button class="btn small danger" type="button" data-disconnect="${p}">Desconectar</button>` : ""}
-    </div>`;
+// ---------------- Contas conectadas (integrações do hub) ----------------
+
+let settingsData = null;
+
+async function loadSettings() {
+  settingsData = await api("/api/settings");
+  renderIntegrations();
+}
+
+/** Campo de configuração: segredos mostram só ••••1234 e ficam em branco (em branco = manter). */
+function settingField(key, label, { secret = false, placeholder = "" } = {}) {
+  const s = settingsData.values[key];
+  const src = s.source === "env" ? ` <span class="muted">(vindo do .env)</span>` : "";
+  return `<label>${label}${src}
+    <input name="${key}" type="${secret ? "password" : "text"}" autocomplete="off"
+      value="${secret ? "" : esc(s.value)}" placeholder="${secret && s.set ? `salvo ${esc(s.value)} — em branco mantém` : esc(placeholder)}">
+  </label>`;
+}
+
+/** Guias passo a passo de cada integração (abre/fecha e lembra o estado entre re-renders). */
+const openGuides = new Set();
+const guide = (id, steps) =>
+  `<details class="guide" data-guide="${id}" ${openGuides.has(id) ? "open" : ""}><summary>📖 Como obter as credenciais</summary><ol>${steps.map((s) => `<li>${s}</li>`).join("")}</ol></details>`;
+
+const link = (url, label = url.replace(/^https:\/\//, "")) => `<a href="${url}" target="_blank" rel="noopener">${label}</a>`;
+
+const GUIDES = {
+  public_url: () => [
+    `No notebook, rode uma vez (pede a senha do sudo):<br><code>sudo tailscale serve --bg --https=10004 http://127.0.0.1:8095</code>`,
+    `Abra <b>https://debian.hedgehog-parrotfish.ts.net:10004</b> no navegador. É um endereço https válido, mas só acessível por aparelhos no seu Tailscale.`,
+    `Cole esse endereço aqui e salve (ou use o botão "Usar…" quando já estiver acessando por ele).`,
+    `O login do YouTube/TikTok funciona mesmo sendo só-Tailscale: o redirecionamento acontece no seu navegador, que está na tailnet.`,
+  ],
+  telegram: () => [
+    `No Telegram, abra ${link("https://t.me/BotFather", "@BotFather")} e envie <code>/newbot</code>.`,
+    `Escolha um nome (ex.: <i>Central de Cortes</i>) e um username terminado em <code>bot</code> (ex.: <i>cortes_rafael_bot</i>).`,
+    `O BotFather responde com o <b>token</b> (formato <code>123456789:AA…</code>). Cole no campo abaixo e clique em <b>Salvar token</b>.`,
+    `Crie um bot novo só para isto: o bot do ig-agent já usa webhook e os dois disputariam as mensagens.`,
+    `Abra o seu bot no Telegram e envie <code>/start</code>. Em alguns segundos o chat aparece aqui — clique em <b>Autorizar este chat</b>. Uma mensagem de teste chega no Telegram.`,
+    `Quer aprovar em grupo? Adicione o bot ao grupo, mande uma mensagem lá e autorize o grupo em vez do chat privado.`,
+  ],
+  youtube: (redirect) => [
+    `Acesse ${link("https://console.cloud.google.com/projectcreate")} e crie um projeto (ex.: <i>Central de Cortes</i>).`,
+    `Em ${link("https://console.cloud.google.com/apis/library/youtube.googleapis.com", "APIs e serviços → Biblioteca → YouTube Data API v3")}, clique em <b>Ativar</b>.`,
+    `Abra ${link("https://console.cloud.google.com/auth/overview", "Google Auth Platform")} (tela de consentimento OAuth): tipo <b>Externo</b>, nome do app, seu e-mail de suporte e de contato.`,
+    `Em <b>Público-alvo → Usuários de teste</b>, adicione o e-mail da conta Google que é dona do canal do YouTube.`,
+    `Em ${link("https://console.cloud.google.com/auth/clients", "Clientes")} → <b>Criar cliente</b> → tipo <b>Aplicativo da Web</b>. Em <b>URIs de redirecionamento autorizados</b>, cole:<br><code>${esc(redirect || "salve a URL pública primeiro")}</code>`,
+    `Crie e copie o <b>ID do cliente</b> e a <b>Chave secreta do cliente</b> para os campos abaixo. Salve.`,
+    `Clique em <b>Conectar conta</b>, entre com a conta do canal e permita o acesso. Se aparecer "o Google não verificou este app", clique em <b>Avançado → Acessar</b> (o app é seu).`,
+    `Atenção: com o app em modo <b>Teste</b>, o Google expira a conexão a cada 7 dias (é só clicar em Reconectar). Para não expirar, em Público-alvo clique em <b>Publicar app</b>.`,
+    `Cota padrão: 10.000 unidades/dia ≈ 6 uploads por dia por projeto. Para mais, peça aumento de cota no próprio console.`,
+  ],
+  tiktok: (redirect) => [
+    `Acesse ${link("https://developers.tiktok.com/")}, entre com sua conta e vá em <b>Manage apps → Connect an app</b> (conta de desenvolvedor individual serve).`,
+    `Preencha nome, ícone, categoria e descrição. O TikTok exige links de <b>Termos de uso</b> e <b>Política de privacidade</b> — pode ser uma página simples sua.`,
+    `Em <b>Products</b>, adicione <b>Login Kit</b> e <b>Content Posting API</b>. No Login Kit, plataforma <b>Web</b>, em <b>Redirect URI</b> cole:<br><code>${esc(redirect || "salve a URL pública primeiro")}</code>`,
+    `Em <b>Scopes</b>, marque <code>user.info.basic</code> e <code>video.upload</code> (rascunho na caixa de entrada). Marque também <code>video.publish</code> se for usar postagem direta.`,
+    `Para usar já, sem esperar aprovação: crie um <b>Sandbox</b> no app, adicione sua conta do TikTok em <b>Target users</b> e use as chaves do sandbox.`,
+    `Copie <b>Client key</b> e <b>Client secret</b> (da tela do app ou do sandbox) para os campos abaixo e salve. Depois clique em <b>Conectar conta</b>.`,
+    `Para produção, envie o app para revisão (<b>Submit for review</b>) explicando o uso e com um vídeo curto de demonstração. Até ser auditado, postagens diretas saem privadas — por isso o padrão aqui é o rascunho na caixa de entrada.`,
+  ],
+};
+
+const copyField = (value) =>
+  `<div class="copy-row"><input readonly value="${esc(value)}"><button class="btn small" type="button" data-copy="${esc(value)}">Copiar</button></div>`;
+
+function renderIntegrations() {
+  const box = $("#integrations");
+  if (!settingsData || box.contains(document.activeElement)) return;
+  const v = settingsData.values;
+  const ch = state.channels.find((c) => c.id === ui.channelId);
+  const tg = settingsData.telegram;
+  const redirects = settingsData.redirects;
+
+  const platformCard = (p, keys, help) => {
+    const ready = v[keys[0]].set && v[keys[1]].set && v.public_url.set;
+    const acct = ch?.connections?.[p];
+    return `<form class="integ" data-settings>
+      <div class="integ-head"><b>${PLATFORM[p]}</b>
+        ${ch ? (acct ? `<span class="ok-dot">${esc(ch.name)}: ${esc(acct)}</span>` : `<span class="muted">${esc(ch.name)}: não conectado</span>`) : ""}</div>
+      <div class="muted help">${help}</div>
+      ${guide(p, GUIDES[p](redirects?.[p]))}
+      ${settingField(keys[0], p === "youtube" ? "Client ID" : "Client key")}
+      ${settingField(keys[1], "Client secret", { secret: true })}
+      ${redirects ? `<label>URI de redirecionamento (cole no console do ${p === "youtube" ? "Google" : "TikTok"})${copyField(redirects[p])}</label>` : ""}
+      <div class="actions">
+        <button class="btn small" type="submit">Salvar chaves</button>
+        ${ch && ready ? `<a class="btn small primary" href="/oauth/${p}/start?channel=${encodeURIComponent(ch.id)}">${acct ? "Reconectar" : "Conectar"} conta de ${esc(ch.name)}</a>` : ""}
+        ${ch && acct ? `<button class="btn small danger" type="button" data-disconnect="${p}">Desconectar</button>` : ""}
+        ${!ready ? `<span class="muted" style="font-size:12px">preencha as chaves e a URL pública para conectar</span>` : ""}
+      </div>
+    </form>`;
   };
-  return `<h3>Contas conectadas</h3><div class="full conns">${row("youtube")}${row("tiktok")}
-    <div class="conn"><b>✈ Telegram</b>${integ.telegram ? `<span class="ok-dot">bot ativo</span>` : `<span class="muted">configure TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID no .env do hub</span>`}</div></div>`;
+
+  const tgStatus = !tg.bot ? `<span class="muted">sem bot</span>`
+    : tg.bot.error ? `<span style="color:var(--red)">token inválido: ${esc(tg.bot.error)}</span>`
+    : `<span class="ok-dot">@${esc(tg.bot.username)}</span>`;
+
+  box.innerHTML = `
+    <h3 class="integ-title">Contas conectadas</h3>
+    <div class="integ-grid">
+      <form class="integ" data-settings>
+        <div class="integ-head"><b>🌐 URL pública do hub</b></div>
+        <div class="muted help">Endereço https pelo qual você abre este painel (Tailscale Serve). Usado no login do YouTube/TikTok e nos links do Telegram.</div>
+        ${guide("public_url", GUIDES.public_url())}
+        ${settingField("public_url", "URL", { placeholder: "https://debian.hedgehog-parrotfish.ts.net:10004" })}
+        <div class="actions"><button class="btn small" type="submit">Salvar</button>
+          ${!v.public_url.set && location.protocol === "https:" ? `<button class="btn small" type="button" data-use-origin>Usar ${esc(location.origin)}</button>` : ""}</div>
+      </form>
+
+      <form class="integ" data-settings>
+        <div class="integ-head"><b>✈ Telegram</b>${tgStatus}${v.telegram_chat_id.set ? `<span class="ok-dot">chat ${esc(v.telegram_chat_id.value)}</span>` : ""}</div>
+        <div class="muted help">Recebe cada corte pronto com botões Aprovar/Rejeitar e avisa quando publica ou falha.</div>
+        ${guide("telegram", GUIDES.telegram())}
+        ${settingField("telegram_bot_token", "Token do bot", { secret: true })}
+        ${tg.bot && !tg.bot.error && !v.telegram_chat_id.set
+          ? (tg.candidates.length
+            ? tg.candidates.map((c) => `<div class="conn"><span>💬 ${esc(c.name)} <span class="muted mono">${esc(c.id)}</span></span><button class="btn small ok" type="button" data-authorize-chat="${esc(c.id)}">Autorizar este chat</button></div>`).join("")
+            : `<div class="muted">Aguardando uma mensagem para @${esc(tg.bot.username)}… (a lista atualiza sozinha)</div>`)
+          : ""}
+        <div class="actions">
+          <button class="btn small" type="submit">Salvar token</button>
+          ${v.telegram_chat_id.set ? `<button class="btn small" type="button" data-tg-test>Enviar teste</button><button class="btn small danger" type="button" data-clear-settings="telegram_chat_id">Trocar chat</button>` : ""}
+          ${v.telegram_bot_token.set ? `<button class="btn small danger" type="button" data-clear-settings="telegram_bot_token,telegram_chat_id">Remover bot</button>` : ""}
+        </div>
+      </form>
+
+      ${platformCard("youtube", ["youtube_client_id", "youtube_client_secret"],
+        "Publica os cortes como Shorts no canal conectado. As chaves do app servem para todos os canais; cada canal conecta a própria conta.")}
+      ${platformCard("tiktok", ["tiktok_client_key", "tiktok_client_secret"],
+        "Envia os cortes como rascunho para a caixa de entrada do app (ou posta direto, com app auditado). Cada canal conecta a própria conta.")}
+    </div>
+    ${ch ? "" : `<div class="muted">Selecione um canal à esquerda para conectar as contas dele.</div>`}`;
+}
+
+async function saveSettingsForm(form) {
+  const body = {};
+  for (const input of form.querySelectorAll("input[name]")) if (!input.readOnly) body[input.name] = input.value;
+  await api("/api/settings", { method: "PUT", body });
+  toast("Configuração salva");
+  document.activeElement?.blur();
+  await loadSettings();
+  await refresh();
 }
 
 function renderChannels() {
@@ -479,7 +605,6 @@ function renderChannels() {
   form.dataset.for = ch.id;
   form.innerHTML =
     CH_FIELDS.map(([k, label, o = {}]) => (k === "h" ? `<h3>${label}</h3>` : `<label class="${o.full ? "full" : ""}">${label}${fieldInput(k, o, ch)}</label>`)).join("") +
-    connectionsBlock(ch) +
     `<h3>Outras credenciais (somente escrita)</h3>
      <div class="full muted" style="font-size:12px">Salvas: ${ch.credentials.length ? ch.credentials.map(esc).join(", ") : "nenhuma"}. Para remover, envie a chave com valor vazio.</div>
      <div class="full cred-row"><input name="cred_key" placeholder="chave"><input name="cred_val" placeholder="valor" type="password"></div>
@@ -562,7 +687,10 @@ function render() {
     if (fresh && fresh.rendered_at !== prev.rendered_at) openClip(fresh.id); // novo render = novo proxy/intervalo
     else if (fresh && ["status", "detail", "scheduled_at", "error"].some((k) => fresh[k] !== prev[k]) && !$("#studio-main").contains(document.activeElement)) renderStudioMain();
   }
-  if (ui.tab === "channels") renderChannels();
+  if (ui.tab === "channels") {
+    renderChannels();
+    loadSettings().catch((e) => toast(e.message, true));
+  }
   if (ui.tab === "costs") renderCosts();
 }
 
@@ -600,11 +728,36 @@ document.addEventListener("click", act(async (e) => {
     $("#channel-form").dataset.for = "-";
     await refresh();
   }
+  if (t.dataset.copy !== undefined) {
+    await navigator.clipboard.writeText(t.dataset.copy);
+    toast("Copiado");
+  }
+  if (t.dataset.useOrigin !== undefined) {
+    await api("/api/settings", { method: "PUT", body: { public_url: location.origin } });
+    await loadSettings();
+    await refresh();
+  }
+  if (t.dataset.authorizeChat) {
+    await api("/api/settings/telegram/authorize", { method: "POST", body: { chat_id: t.dataset.authorizeChat } });
+    toast("Chat autorizado — enviando mensagem de teste");
+    await api("/api/settings/telegram/test", { method: "POST" });
+    await loadSettings();
+  }
+  if (t.dataset.tgTest !== undefined) {
+    await api("/api/settings/telegram/test", { method: "POST" });
+    toast("Mensagem de teste enviada");
+  }
+  if (t.dataset.clearSettings && confirm("Remover esta configuração?")) {
+    await api("/api/settings", { method: "PUT", body: Object.fromEntries(t.dataset.clearSettings.split(",").map((k) => [k, null])) });
+    await loadSettings();
+    await refresh();
+  }
   const chItem = t.closest("#channel-list li");
   if (chItem) {
     ui.channelId = chItem.dataset.ch;
     $("#channel-form").dataset.for = "-";
     renderChannels();
+    renderIntegrations();
   }
   if (t.id === "new-channel") {
     ui.channelId = "";
@@ -620,6 +773,16 @@ $("#studio-filter").addEventListener("click", (e) => {
   renderClipList();
 });
 $("#channel-form").addEventListener("submit", act(saveChannelForm));
+$("#integrations").addEventListener("toggle", (e) => {
+  const id = e.target.dataset?.guide;
+  if (!id) return;
+  if (e.target.open) openGuides.add(id);
+  else openGuides.delete(id);
+}, true);
+$("#integrations").addEventListener("submit", act(async (e) => {
+  e.preventDefault();
+  await saveSettingsForm(e.target);
+}));
 wireStudio();
 
 /** Links vindos do Telegram (#clip=ID) e retorno do OAuth (#channels:plataforma:mensagem). */

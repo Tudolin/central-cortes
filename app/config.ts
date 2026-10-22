@@ -32,8 +32,6 @@ export const config = {
   port,
   dashboardUser: env("DASHBOARD_USER", "admin"),
   dashboardPassword: process.env.DASHBOARD_PASSWORD ?? "",
-  /** URL https pela qual o navegador acessa o hub (OAuth, links do Telegram). */
-  publicUrl: env("PUBLIC_URL", "").replace(/\/$/, ""),
   timezone: env("TZ", "America/Sao_Paulo"),
   /** Dias para manter mp4/proxy de cortes publicados no hub (disco do notebook é curto). */
   retentionDays: num("RETENTION_DAYS", 14),
@@ -68,18 +66,7 @@ export const config = {
   defaultModel: env("CLAUDE_MODEL", "claude-opus-5-5"),
   defaultEffort: env("CLAUDE_EFFORT", "medium") as Effort,
 
-  telegram: {
-    token: process.env.TELEGRAM_BOT_TOKEN ?? "",
-    chatId: process.env.TELEGRAM_CHAT_ID ?? "",
-  },
-  youtube: {
-    clientId: process.env.YOUTUBE_CLIENT_ID ?? "",
-    clientSecret: process.env.YOUTUBE_CLIENT_SECRET ?? "",
-  },
-  tiktok: {
-    clientKey: process.env.TIKTOK_CLIENT_KEY ?? "",
-    clientSecret: process.env.TIKTOK_CLIENT_SECRET ?? "",
-  },
+  // URL pública, Telegram e chaves de YouTube/TikTok: ver hub/settings.ts (dashboard, com .env como fallback).
 };
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";

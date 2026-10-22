@@ -86,6 +86,12 @@ CREATE TABLE IF NOT EXISTS posts (
   UNIQUE (clip_id, platform)
 );
 
+-- Integrações do hub (chaves de app, bot do Telegram, URL pública) editáveis pelo dashboard.
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workers (
   name TEXT PRIMARY KEY,
   last_seen TEXT NOT NULL,

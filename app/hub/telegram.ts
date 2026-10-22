@@ -1,6 +1,8 @@
 import { existsSync, openAsBlob, statSync } from "node:fs";
 import { config } from "../config.ts";
+import { settings } from "./settings.ts";
 import { all, get, getChannel, getClip, getJob, updateClip, type Clip, type Job, type Post } from "../db.ts";
+import { bus } from "../events.ts";
 import { clipPath } from "./media.ts";
 import { approve, reject } from "./schedule.ts";
 
@@ -8,7 +10,7 @@ import { approve, reject } from "./schedule.ts";
  * Bot de aprovação via long polling (não precisa de URL pública nem conflita com o webhook do ig-agent,
  * desde que seja um bot próprio). Só aceita comandos do TELEGRAM_CHAT_ID configurado.
  */
-const enabled = () => !!(config.telegram.token && config.telegram.chatId);
+const enabled = () => !!(settings.telegram.token && settings.telegram.chatId);
 const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
 const fmtWhen = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString("pt-BR", { timeZone: config.timezone, weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -16,10 +18,10 @@ const dur = (c: Clip) => {
   const s = Math.round(c.end_s - c.start_s);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
-const studioLink = (clipId: number) => (config.publicUrl.startsWith("https://") ? `${config.publicUrl}/#clip=${clipId}` : "");
+const studioLink = (clipId: number) => (settings.publicUrl.startsWith("https://") ? `${settings.publicUrl}/#clip=${clipId}` : "");
 
 async function call<T = any>(method: string, body: Record<string, unknown> | FormData): Promise<T> {
-  const r = await fetch(`https://api.telegram.org/bot${config.telegram.token}/${method}`, {
+  const r = await fetch(`https://api.telegram.org/bot${settings.telegram.token}/${method}`, {
     method: "POST",
     ...(body instanceof FormData ? { body } : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(method === "getUpdates" ? 70_000 : 120_000),
@@ -50,7 +52,7 @@ function reviewKeyboard(clipId: number) {
 
 async function send(text: string) {
   if (!enabled()) return;
-  await call("sendMessage", { chat_id: config.telegram.chatId, text, parse_mode: "HTML", disable_web_page_preview: true }).catch((e) =>
+  await call("sendMessage", { chat_id: settings.telegram.chatId, text, parse_mode: "HTML", disable_web_page_preview: true }).catch((e) =>
     console.error(`[telegram] ${e.message}`),
   );
 }
@@ -65,7 +67,7 @@ export const tg = {
       const mp4 = clipPath(c.job_id, c.id, "mp4");
       const jpg = clipPath(c.job_id, c.id, "jpg");
       const fd = new FormData();
-      fd.set("chat_id", config.telegram.chatId);
+      fd.set("chat_id", settings.telegram.chatId);
       fd.set("caption", reviewCaption(c));
       fd.set("parse_mode", "HTML");
       fd.set("reply_markup", JSON.stringify(reviewKeyboard(c.id)));
@@ -80,7 +82,7 @@ export const tg = {
         fd.set("photo", await openAsBlob(jpg, { type: "image/jpeg" }), "corte.jpg");
       }
       // Re-render: apaga a mensagem antiga para não ficar botão órfão.
-      if (c.tg_message_id) await call("deleteMessage", { chat_id: config.telegram.chatId, message_id: c.tg_message_id }).catch(() => {});
+      if (c.tg_message_id) await call("deleteMessage", { chat_id: settings.telegram.chatId, message_id: c.tg_message_id }).catch(() => {});
       const msg = await call<{ message_id: number }>(method, fd);
       updateClip(c.id, { tg_message_id: msg.message_id });
     } catch (e) {
@@ -93,7 +95,7 @@ export const tg = {
     if (!enabled() || !c.tg_message_id) return;
     const footer = kind === "approved" ? `✅ <b>Aprovado</b> — agendado para ${fmtWhen(c.scheduled_at)}` : "❌ <b>Rejeitado</b>";
     await call("editMessageCaption", {
-      chat_id: config.telegram.chatId,
+      chat_id: settings.telegram.chatId,
       message_id: c.tg_message_id,
       caption: reviewCaption(c, footer),
       parse_mode: "HTML",
@@ -125,7 +127,7 @@ export const tg = {
 };
 
 async function onCallback(q: { id: string; data?: string; message?: { chat: { id: number } } }) {
-  if (String(q.message?.chat.id) !== config.telegram.chatId) return;
+  if (String(q.message?.chat.id) !== settings.telegram.chatId) return;
   const [action, idStr] = (q.data ?? "").split(":");
   const id = Number(idStr);
   let text = "";
@@ -145,14 +147,22 @@ async function onCallback(q: { id: string; data?: string; message?: { chat: { id
   await call("answerCallbackQuery", { callback_query_id: q.id, text }).catch(() => {});
 }
 
-async function onMessage(m: { chat: { id: number }; text?: string }) {
+/**
+ * Chats que mandaram mensagem ao bot enquanto nenhum chat estava autorizado. O dashboard lista e o
+ * usuário escolhe qual autorizar — o bot nunca se autoriza sozinho para quem chegar primeiro.
+ */
+export const chatCandidates = new Map<string, { id: string; name: string; at: string }>();
+
+async function onMessage(m: { chat: { id: number; title?: string; first_name?: string; last_name?: string; username?: string }; text?: string }) {
   const chat = String(m.chat.id);
-  if (!config.telegram.chatId) {
-    // Configuração inicial: descobre o chat id.
-    await call("sendMessage", { chat_id: chat, text: `Seu chat id é ${chat}. Coloque TELEGRAM_CHAT_ID=${chat} no .env do hub e reinicie.` });
+  if (!settings.telegram.chatId) {
+    const name = m.chat.title || [m.chat.first_name, m.chat.last_name].filter(Boolean).join(" ") || m.chat.username || chat;
+    chatCandidates.set(chat, { id: chat, name, at: new Date().toISOString() });
+    bus.emit("change", { table: "settings" });
+    await call("sendMessage", { chat_id: chat, text: `Recebi! Agora abra o dashboard → Canais → Contas conectadas e clique em "Autorizar este chat" (${name}).` });
     return;
   }
-  if (chat !== config.telegram.chatId) return;
+  if (chat !== settings.telegram.chatId) return;
   const cmd = (m.text ?? "").split(/[\s@]/)[0];
   if (cmd === "/agenda") {
     const next = all<Clip & { channel: string }>(
@@ -174,13 +184,40 @@ async function onMessage(m: { chat: { id: number }; text?: string }) {
   }
 }
 
+/** Dados do bot para o dashboard (valida o token). */
+export async function telegramBotInfo(): Promise<{ username: string } | { error: string } | null> {
+  if (!settings.telegram.token) return null;
+  try {
+    return await call<{ username: string }>("getMe", {});
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
+export async function telegramTest() {
+  if (!enabled()) throw new Error("Configure o token e autorize um chat primeiro");
+  await call("sendMessage", { chat_id: settings.telegram.chatId, text: "✅ Central de Cortes conectada. Os cortes prontos chegarão aqui para aprovação." });
+}
+
+/** Long polling que acompanha mudanças de token feitas pelo dashboard sem reiniciar o hub. */
 export async function startTelegram() {
-  if (!config.telegram.token) return;
-  console.log("[telegram] bot ativo (long polling)");
   let offset = 0;
+  let activeToken = "";
   for (;;) {
+    const token = settings.telegram.token;
+    if (!token) {
+      activeToken = "";
+      await new Promise((r) => setTimeout(r, 5_000));
+      continue;
+    }
+    if (token !== activeToken) {
+      activeToken = token;
+      offset = 0;
+      chatCandidates.clear();
+      console.log("[telegram] bot ativo (long polling)");
+    }
     try {
-      const updates = await call<any[]>("getUpdates", { offset, timeout: 50, allowed_updates: ["message", "callback_query"] });
+      const updates = await call<any[]>("getUpdates", { offset, timeout: 20, allowed_updates: ["message", "callback_query"] });
       for (const u of updates) {
         offset = u.update_id + 1;
         if (u.callback_query) await onCallback(u.callback_query);

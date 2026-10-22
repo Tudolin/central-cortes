@@ -47,7 +47,7 @@ node app/main.ts
 - **YouTube Shorts**: upload resumable via YouTube Data API (OAuth por canal; cota padrão ≈ 6 uploads/dia por projeto Google).
 - **TikTok**: modo `inbox` (padrão) envia como rascunho para a caixa de entrada do app — sem auditoria do app, é o único modo que fica público; você finaliza no celular e o Telegram manda a legenda pronta para colar. Modo `direct` publica direto, mas o TikTok só libera visibilidade pública depois de auditar o app.
 - Falha de publicação tenta de novo em 5, 20 e 60 min; plataformas que já deram certo não são repetidas.
-- **Telegram**: crie um bot novo no @BotFather, mande qualquer mensagem para ele (o bot responde com o seu chat id) e preencha `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`. Comandos: `/status`, `/agenda`.
+- **Credenciais**: URL pública, bot do Telegram e chaves de app do YouTube/TikTok são configuradas no dashboard (Canais → Contas conectadas), cada uma com um guia passo a passo. O `.env` continua aceito como fallback. Comandos do bot: `/status`, `/agenda`.
 
 ## Por que essa stack
 

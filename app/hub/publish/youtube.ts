@@ -1,13 +1,13 @@
 import { openAsBlob, statSync } from "node:fs";
-import { config } from "../../config.ts";
+import { settings } from "../settings.ts";
 import { credentialsOf, setCredentials, type Channel, type Clip } from "../../db.ts";
 
 const SCOPE = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly";
-export const youtubeRedirect = () => `${config.publicUrl}/oauth/youtube/callback`;
+export const youtubeRedirect = () => `${settings.publicUrl}/oauth/youtube/callback`;
 
 export function youtubeAuthUrl(state: string): string {
   const q = new URLSearchParams({
-    client_id: config.youtube.clientId,
+    client_id: settings.youtube.clientId,
     redirect_uri: youtubeRedirect(),
     response_type: "code",
     scope: SCOPE,
@@ -22,7 +22,7 @@ async function tokenRequest(params: Record<string, string>) {
   const r = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: config.youtube.clientId, client_secret: config.youtube.clientSecret, ...params }),
+    body: new URLSearchParams({ client_id: settings.youtube.clientId, client_secret: settings.youtube.clientSecret, ...params }),
   });
   const data = (await r.json()) as { access_token?: string; refresh_token?: string; error?: string; error_description?: string };
   if (!r.ok || !data.access_token) throw new Error(`Google OAuth: ${data.error_description || data.error || r.status}`);

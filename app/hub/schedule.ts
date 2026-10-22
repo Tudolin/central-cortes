@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { config } from "../config.ts";
+import { settings } from "./settings.ts";
 import { all, get, getChannel, getClip, getJob, run, updateClip, type Channel, type Clip, type Platform, type Post } from "../db.ts";
 import { bus } from "../events.ts";
 import { buildResult } from "../pipeline/caption.ts";
@@ -141,7 +142,7 @@ async function fireWebhook(ch: Channel, clipId: number) {
         event: "clip.published",
         channel_id: ch.id,
         posts: all<Post>("SELECT platform, status, url, external_id FROM posts WHERE clip_id = ?", clipId),
-        video_file_url: config.publicUrl ? `${config.publicUrl}/media/clip/${clipId}.mp4` : null,
+        video_file_url: settings.publicUrl ? `${settings.publicUrl}/media/clip/${clipId}.mp4` : null,
         corte: buildResult(ch, job, [clip]).cortes[0],
       }),
       signal: AbortSignal.timeout(15_000),

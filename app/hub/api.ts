@@ -1,15 +1,18 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { config } from "../config.ts";
+import { settings } from "./settings.ts";
 import { all, credentialsOf, getChannel, getClip, getJob, run, setCredentials, updateChannel, updateClip, updateJob, type Channel, type Clip, type Job } from "../db.ts";
 import { bus } from "../events.ts";
 import { HttpError, must, route, serveFile } from "../http.ts";
 import { buildResult, renderCaption } from "../pipeline/caption.ts";
 import type { Transcript } from "../pipeline/transcribe.ts";
 import { clipPath, jobMediaDir, transcriptPath } from "./media.ts";
-import { tiktokAuthUrl, tiktokConnect } from "./publish/tiktok.ts";
-import { youtubeAuthUrl, youtubeConnect } from "./publish/youtube.ts";
+import { tiktokAuthUrl, tiktokConnect, tiktokRedirect } from "./publish/tiktok.ts";
+import { youtubeAuthUrl, youtubeConnect, youtubeRedirect } from "./publish/youtube.ts";
 import { approve, rebalance, reject } from "./schedule.ts";
+import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
+import { chatCandidates, telegramBotInfo, telegramTest } from "./telegram.ts";
 
 const publicChannel = (c: Channel) => {
   const creds = credentialsOf(c);
@@ -42,13 +45,63 @@ route("GET", "/api/state", () => {
   );
   const workers = all("SELECT * FROM workers ORDER BY last_seen DESC");
   const integrations = {
-    youtube: !!(config.youtube.clientId && config.youtube.clientSecret && config.publicUrl),
-    tiktok: !!(config.tiktok.clientKey && config.tiktok.clientSecret && config.publicUrl),
-    telegram: !!(config.telegram.token && config.telegram.chatId),
-    publicUrl: config.publicUrl,
+    youtube: !!(settings.youtube.clientId && settings.youtube.clientSecret && settings.publicUrl),
+    tiktok: !!(settings.tiktok.clientKey && settings.tiktok.clientSecret && settings.publicUrl),
+    telegram: !!(settings.telegram.token && settings.telegram.chatId),
+    publicUrl: settings.publicUrl,
     timezone: config.timezone,
   };
   return { channels, jobs, clips, posts, costs, daily, workers, integrations };
+});
+
+// ---------- Integrações (chaves de app e bot), editáveis pelo dashboard ----------
+
+route("GET", "/api/settings", async () => {
+  const out: Record<string, { value: string; set: boolean; source: string }> = {};
+  for (const [key, meta] of Object.entries(SETTING_KEYS) as [SettingKey, (typeof SETTING_KEYS)[SettingKey]][]) {
+    const { value, source } = readSetting(key);
+    // Segredos nunca voltam ao navegador: só os 4 últimos caracteres para conferência.
+    out[key] = { value: meta.secret ? (value ? `••••${value.slice(-4)}` : "") : value, set: !!value, source };
+  }
+  const base = settings.publicUrl;
+  return {
+    values: out,
+    redirects: base ? { youtube: youtubeRedirect(), tiktok: tiktokRedirect() } : null,
+    telegram: { bot: await telegramBotInfo(), candidates: [...chatCandidates.values()] },
+  };
+});
+
+route("PUT", "/api/settings", (_q, _r, _p, body: Record<string, string | null>) => {
+  const patch: Partial<Record<SettingKey, string | null>> = {};
+  for (const [key, value] of Object.entries(body ?? {})) {
+    if (!(key in SETTING_KEYS)) continue;
+    const k = key as SettingKey;
+    // Campo secreto em branco = manter o valor atual; null = remover.
+    if (SETTING_KEYS[k].secret && value === "") continue;
+    if (k === "public_url" && value && !/^https:\/\/[^\s/]+(:\d+)?\/?$/.test(value.trim())) {
+      throw new HttpError(400, "URL pública deve ser https://host[:porta], sem caminho");
+    }
+    patch[k] = value;
+  }
+  writeSettings(patch);
+  return { ok: true };
+});
+
+route("POST", "/api/settings/telegram/authorize", (_q, _r, _p, body: { chat_id: string }) => {
+  const c = chatCandidates.get(String(body?.chat_id));
+  if (!c) throw new HttpError(404, "Chat não encontrado — mande uma mensagem ao bot primeiro");
+  writeSettings({ telegram_chat_id: c.id });
+  chatCandidates.clear();
+  return { ok: true };
+});
+
+route("POST", "/api/settings/telegram/test", async () => {
+  try {
+    await telegramTest();
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message);
+  }
+  return { ok: true };
 });
 
 route("GET", "/api/events", (req, res) => {
@@ -229,7 +282,7 @@ function startOAuth(platform: "youtube" | "tiktok") {
   return (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => {
     const channelId = new URL(req.url!, "http://x").searchParams.get("channel") ?? "";
     const ch = must(getChannel(channelId), "Canal");
-    if (!config.publicUrl.startsWith("https://")) throw new HttpError(400, "Defina PUBLIC_URL (https) no .env do hub");
+    if (!settings.publicUrl.startsWith("https://")) throw new HttpError(400, "Defina a URL pública (https) em Canais → Contas conectadas");
     const state = randomBytes(16).toString("hex");
     pendingStates.set(state, { channel: ch.id, platform, at: Date.now() });
     const url = platform === "youtube" ? youtubeAuthUrl(state) : tiktokAuthUrl(ch, state);

@@ -186,6 +186,22 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .checks label { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 14px; }
 .source-video.empty { display: grid; place-items: center; }
 
+.channel-main { display: grid; gap: 16px; min-width: 0; }
+.integ-title { margin: 0 0 12px; font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--accent); }
+.integ-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.integ { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; display: grid; gap: 8px; align-content: start; }
+.integ-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.integ label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.integ .help { font-size: 12px; line-height: 1.4; }
+.integ .conn { background: var(--panel); justify-content: space-between; }
+.guide { background: var(--panel); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; }
+.guide summary { cursor: pointer; font-weight: 700; color: var(--accent); }
+.guide ol { margin: 10px 0 4px; padding-left: 20px; display: grid; gap: 8px; line-height: 1.45; }
+.guide code { background: #000; padding: 1px 5px; border-radius: 3px; font-size: 12px; overflow-wrap: anywhere; }
+.guide a { color: var(--blue); }
+.copy-row { display: flex; gap: 6px; }
+.copy-row input { flex: 1; font-family: ui-monospace, monospace; font-size: 12px; }
+
 #toast {
   position: fixed; bottom: 20px; right: 20px; background: #000; border: 1px solid var(--accent);
   padding: 10px 16px; border-radius: var(--radius); opacity: 0; transform: translateY(10px); transition: .2s; pointer-events: none; max-width: 420px;
