@@ -378,4 +378,13 @@ function serveLegal(res: import("node:http").ServerResponse, page: string) {
 }
 
 route("GET", "/legal/?", (_q, res) => serveLegal(res, ""), "public");
-route("GET", "/legal/:page", (_q, res, [page]) => serveLegal(res, page), "public");
+route("GET", "/legal/:page", (_q, res, [page]) => {
+  // Verificação de prefixo de URL do TikTok: arquivo "tiktok….txt" baixado do portal e colocado em data/verify/.
+  if (/^tiktok[A-Za-z0-9_-]*\.txt$/.test(page)) {
+    const file = join(config.dataDir, "verify", page);
+    if (!existsSync(file)) throw new HttpError(404, "Arquivo de verificação não encontrado");
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    return void res.end(readFileSync(file));
+  }
+  serveLegal(res, page);
+}, "public");
