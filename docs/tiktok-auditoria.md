@@ -20,7 +20,19 @@ O dashboard já segue as [diretrizes de Direct Post](https://developers.tiktok.c
 
 ## Antes de enviar
 
-1. **Páginas públicas obrigatórias.** O TikTok pede URLs públicas de site, Termos de Uso e Política de Privacidade. O dashboard é só-Tailscale, então publique duas páginas simples em outro lugar (GitHub Pages, Notion público ou o site do canal) explicando que o app só publica vídeos na conta do próprio dono e não coleta dados de terceiros.
+1. **Páginas públicas obrigatórias.** O hub já serve, sem senha, a página do app, os Termos e a Política de Privacidade (`web/legal/`, rota `/legal/`). Para ficarem públicas na internet, publique pelo Funnel no notebook (uma vez):
+
+   ```bash
+   sudo tailscale funnel --bg --set-path /central-cortes http://127.0.0.1:8095/legal
+   ```
+
+   Defina o e-mail de contato exibido nas páginas em `~/editor-cortes/.env` (`LEGAL_CONTACT_EMAIL=...`) e rode `docker compose up -d`.
+
+   | Página | URL |
+   |---|---|
+   | Site do app | `https://debian.hedgehog-parrotfish.ts.net/central-cortes/` |
+   | Termos de Uso | `https://debian.hedgehog-parrotfish.ts.net/central-cortes/terms` |
+   | Política de Privacidade | `https://debian.hedgehog-parrotfish.ts.net/central-cortes/privacy` |
 2. **App de produção.** Em *developers.tiktok.com → seu app → Production*:
    - Products: **Login Kit** (Redirect URI `https://debian.hedgehog-parrotfish.ts.net:10004/oauth/tiktok/callback`) e **Content Posting API** com **Direct Post** ativado.
    - Scopes: `user.info.basic`, `video.upload`, `video.publish`.
@@ -43,7 +55,23 @@ Grave a tela do navegador, sem cortes, em inglês ou com legendas em inglês se 
 5. **Resultado** — quando o card for para "Publicado", mostre o link do post e abra o vídeo no TikTok (no sandbox, visível só para você).
 6. *(Opcional)* Mostre a aprovação pelo Telegram: Aprovar → escolher visibilidade → interações → "concordo com a Music Usage Confirmation".
 
+## Formulário "Basic information"
+
+| Campo | Valor |
+|---|---|
+| App icon | `assets/logo-1024.png` |
+| App name | `Central de Cortes` |
+| Category | Photo & Video (ou Entertainment, se não houver) |
+| Description (máx. 120) | `Private tool that turns a creator's own long videos into vertical clips and posts approved ones to their TikTok.` |
+| Terms of Service URL | `https://debian.hedgehog-parrotfish.ts.net/central-cortes/terms` |
+| Privacy Policy URL | `https://debian.hedgehog-parrotfish.ts.net/central-cortes/privacy` |
+| Platforms | **Web** — Website URL: `https://debian.hedgehog-parrotfish.ts.net/central-cortes/` |
+
 ## Textos para o formulário de revisão
+
+**Explain how each product and scope works** (cole no campo "App review")
+
+> Central de Cortes is a private web dashboard used only by the owner of the Ideias em Comum channel. Login Kit (user.info.basic): the owner connects their own TikTok account; we show the connected nickname and avatar on the posting screen. Content Posting API (video.publish): for each clip, the owner previews the video, edits the caption, chooses the privacy level (no default), comments/Duet/Stitch (off by default, greyed out when disabled in the account), and the commercial content disclosure, then explicitly agrees to the Music Usage Confirmation and clicks Publish. Only then the video is uploaded to the owner's own account; we poll the publish status and show the result. video.upload sends a clip to the owner's TikTok inbox as a draft when direct posting is turned off. The app never posts to accounts other than the one that authorized it.
 
 **App description**
 

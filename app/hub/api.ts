@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { config } from "../config.ts";
 import { settings } from "./settings.ts";
 import { all, credentialsOf, getChannel, getClip, getJob, run, setCredentials, updateChannel, updateClip, updateJob, type Channel, type Clip, type Job } from "../db.ts";
 import { bus } from "../events.ts";
-import { HttpError, must, route, serveFile } from "../http.ts";
+import { HttpError, MIME, must, route, serveFile } from "../http.ts";
 import { buildResult, renderCaption } from "../pipeline/caption.ts";
 import type { Transcript } from "../pipeline/transcribe.ts";
 import { clipPath, jobMediaDir, transcriptPath } from "./media.ts";
@@ -356,3 +357,25 @@ route("GET", "/media/clip/:file", (req, res, [file]) => {
     : undefined;
   serveFile(req, res, clipPath(clip.job_id, clip.id, kind), download);
 });
+
+// ---------- Site público (exigido pelo TikTok: página do app, termos e privacidade) ----------
+// Sem autenticação; publicado pelo Tailscale Funnel em https://<host>/central-cortes/.
+
+const LEGAL_PAGES: Record<string, string> = { "": "index.html", terms: "terms.html", privacy: "privacy.html", "style.css": "style.css", "logo.svg": "logo.svg" };
+
+function serveLegal(res: import("node:http").ServerResponse, page: string) {
+  const file = LEGAL_PAGES[page];
+  if (!file) throw new HttpError(404, "Página não encontrada");
+  const ext = file.slice(file.lastIndexOf("."));
+  let body = readFileSync(join(config.webDir, "legal", file), "utf8");
+  if (ext === ".html") {
+    body = body
+      .replaceAll("{{CONTACT}}", process.env.LEGAL_CONTACT_EMAIL || "contato@exemplo.com")
+      .replaceAll("{{UPDATED}}", "October 22, 2026");
+  }
+  res.writeHead(200, { "content-type": MIME[ext] ?? "text/plain", "cache-control": "public, max-age=300" });
+  res.end(body);
+}
+
+route("GET", "/legal/?", (_q, res) => serveLegal(res, ""), "public");
+route("GET", "/legal/:page", (_q, res, [page]) => serveLegal(res, page), "public");
