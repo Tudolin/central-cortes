@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Central de Cortes</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23111'/%3E%3Crect x='6' y='4' width='10' height='24' fill='%23FFD700'/%3E%3Ccircle cx='23' cy='22' r='5' fill='%23fff'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="brand-mark"></span>CORTES<span class="brand-slash">//</span>CENTRAL</div>
+    <nav class="tabs" role="tablist">
+      <button data-tab="pipeline" class="active">Pipeline</button>
+      <button data-tab="studio">Estúdio <span class="pill" id="pending-count">0</span></button>
+      <button data-tab="channels">Canais</button>
+      <button data-tab="costs">Custos</button>
+    </nav>
+    <select id="channel-filter" aria-label="Filtrar canal"></select>
+  </header>
+
+  <main>
+    <!-- PIPELINE -->
+    <section id="tab-pipeline" class="tab active">
+      <form id="new-job" class="new-job">
+        <select name="channel_id" aria-label="Canal" required></select>
+        <textarea name="source" rows="1" placeholder="URL do YouTube (ou caminho de arquivo no servidor). Várias? Uma por linha." required></textarea>
+        <button class="btn primary" type="submit">Processar</button>
+      </form>
+      <div class="kanban" id="kanban"></div>
+      <div id="failures"></div>
+    </section>
+
+    <!-- ESTÚDIO -->
+    <section id="tab-studio" class="tab">
+      <div class="studio">
+        <aside class="studio-list">
+          <div class="seg" id="studio-filter">
+            <button data-f="PENDING_REVIEW" class="active">Pendentes</button>
+            <button data-f="PUBLISHED">Publicados</button>
+            <button data-f="ALL">Todos</button>
+          </div>
+          <ul id="clip-list"></ul>
+        </aside>
+        <div class="studio-main" id="studio-main">
+          <p class="empty">Selecione um corte para revisar.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- CANAIS -->
+    <section id="tab-channels" class="tab">
+      <div class="channels">
+        <aside>
+          <ul id="channel-list"></ul>
+          <button class="btn" id="new-channel">+ Novo canal</button>
+        </aside>
+        <form id="channel-form" class="card form"></form>
+      </div>
+    </section>
+
+    <!-- CUSTOS -->
+    <section id="tab-costs" class="tab">
+      <div id="costs"></div>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

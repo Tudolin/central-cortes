@@ -1,0 +1,21 @@
+[Unit]
+Description=Central de Cortes (pipeline + dashboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cortes
+Group=cortes
+WorkingDirectory=__APP_DIR__
+ExecStart=/usr/bin/node app/main.ts
+Restart=on-failure
+RestartSec=5
+# ffmpeg/whisper são pesados: mantém o dashboard responsivo
+Nice=5
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

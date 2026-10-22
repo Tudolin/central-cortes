@@ -1,0 +1,83 @@
+PASSO A PASSO - MODELO DE ANALISE PARA PODCASTS/DEBATES
+
+1) Instalar/abrir o Ollama
+
+Baixe em:
+https://ollama.com/download/windows
+
+Feche e abra o PowerShell, depois teste:
+
+ollama --version
+
+
+2) Baixar um modelo melhor para analise argumentativa
+
+Recomendado para qualidade:
+
+ollama pull qwen3:14b
+
+Se ficar pesado/lento:
+
+ollama pull llama3.1:8b
+
+Se sua maquina tiver bastante RAM/VRAM e voce quiser mais qualidade:
+
+ollama pull qwen3:32b
+
+
+3) Rodar com o modo debate
+
+O modo debate faz o LLM mapear blocos argumentativos antes de pontuar:
+- contexto
+- pergunta/acusacao
+- tese/resposta
+- exemplo/evidencia
+- conflito
+- fechamento
+
+Comando recomendado:
+
+python .\main.py "https://www.youtube.com/watch?v=C0ucX3GZo-c" --language pt --clip-count 12 --min-duration 60 --max-duration 220 --context-padding 40 --analysis-mode debate --model qwen3:14b --ollama-context 16384 --ollama-timeout 600 --ffmpeg "C:\ffmpeg\bin\ffmpeg.exe" --ffprobe "C:\ffmpeg\bin\ffprobe.exe"
+
+
+3.1) Rodar usando um arquivo ja baixado
+
+Use aspas no caminho porque o nome tem espacos:
+
+python .\main.py "output\downloads\CORTEZ x PAVANATO - Flow Debate #001.mp4" --language pt --clip-count 12 --min-duration 60 --max-duration 220 --context-padding 40 --skip-start 120 --analysis-mode debate --model qwen3:14b --ollama-context 16384 --ollama-timeout 600 --ffmpeg "C:\ffmpeg\bin\ffmpeg.exe" --ffprobe "C:\ffmpeg\bin\ffprobe.exe"
+
+
+4) Se estiver lento demais
+
+Use um contexto menor e/ou modelo menor:
+
+python .\main.py "https://www.youtube.com/watch?v=C0ucX3GZo-c" --language pt --clip-count 12 --min-duration 60 --max-duration 180 --context-padding 30 --analysis-mode debate --model llama3.1:8b --ollama-context 8192 --ollama-timeout 420 --ffmpeg "C:\ffmpeg\bin\ffmpeg.exe" --ffprobe "C:\ffmpeg\bin\ffprobe.exe"
+
+
+5) Como avaliar o resultado
+
+Depois da execucao, abra:
+
+output\<titulo_do_video>\argument_map.json
+output\<titulo_do_video>\clips.json
+output\<titulo_do_video>\transcript.txt
+
+O argument_map.json mostra como o modelo entendeu cada corte:
+- topic
+- question_or_accusation
+- thesis
+- counterpoint
+- resolution
+- score
+- title
+- reason
+
+Se os cortes ainda vierem sem contexto, aumente:
+
+--context-padding 60
+--max-duration 260
+
+Se vierem longos demais, reduza:
+
+--max-duration 160
+--context-padding 25
