@@ -235,3 +235,61 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .tt .en { color: var(--muted); font-size: 11px; font-weight: 400; }
 .disk-low { color: var(--accent); }
 .disk-crit { color: var(--red); font-weight: 700; }
+
+/* ---------- Celular ---------- */
+.kchips, .m-only { display: none; }
+@media (max-width: 900px) {
+  /* Cabeçalho em duas linhas: marca + status + filtro; abas embaixo, roláveis. */
+  .top { height: auto; flex-wrap: wrap; row-gap: 0; padding: 8px 12px 0; overflow: visible; }
+  .brand { flex: 1; font-size: 13px; }
+  .brand-mark { width: 8px; height: 16px; }
+  #channel-filter { max-width: 42vw; padding: 5px 8px; font-size: 12px; }
+  .worker { order: 1; flex-basis: 100%; padding: 4px 0 2px; overflow: hidden; text-overflow: ellipsis; }
+  .tabs { order: 2; flex-basis: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tabs button { flex: 1; padding: 12px 8px 11px; font-size: 11px; white-space: nowrap; }
+
+  /* Kanban: abas por coluna, mostra uma coluna por vez em largura total. */
+  .kchips { display: flex; gap: 6px; overflow-x: auto; margin: 0 -12px 12px; padding: 0 12px 4px; scrollbar-width: none; }
+  .kchips button {
+    flex: none; background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--c);
+    border-radius: var(--radius); padding: 8px 10px; font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap;
+  }
+  .kchips button b { color: var(--text); margin-left: 4px; }
+  .kchips button.active { background: var(--panel-2); color: var(--text); border-color: var(--c); }
+  .kanban { display: block; overflow: visible; }
+  .kanban .col { display: none; min-height: 0; }
+  .kanban .col.on { display: block; }
+  .kanban .col h3 { display: none; }
+  .kanban .col .cards { padding: 8px; }
+  .kanban .col .cards:empty::after { content: "Nada nesta etapa."; color: var(--muted); padding: 24px; text-align: center; display: block; }
+  .kcard .thumb img { width: 64px; height: 114px; }
+  .fail { flex-wrap: wrap; }
+  .fail .err { flex-basis: 100%; }
+
+  /* Estúdio: lista OU corte aberto. */
+  .studio-list { max-height: none; }
+  .studio.open .studio-list { display: none; }
+  .studio:not(.open) .studio-main { display: none; }
+  .m-only { display: block; }
+  .studio-main .back { width: 100%; }
+  .phone { width: min(100%, calc(62vh * 9 / 16)); margin: 0 auto; }
+  .seg button { padding: 12px 4px; }
+  .trim-row input[type=number] { width: 84px; }
+  .trim input[type=range] { height: 28px; }
+  .actions .btn { flex: 1 1 auto; text-align: center; }
+  .btn { padding: 10px 14px; }
+  .btn.small { padding: 7px 10px; }
+  .editor h2 { font-size: 18px; }
+
+  .channels aside { display: grid; gap: 4px; }
+  .studio, .studio-main, .channels, .channel-main, .integ-grid, .integ, .form, .fields { grid-template-columns: minmax(0, 1fr); }
+  .integ, .channel-main, .editor { min-width: 0; }
+  .guide code, .integ b { word-break: break-all; }
+  .form select, .fields select, .cred-row input { min-width: 0; width: 100%; }
+  .card { padding: 12px; }
+  .card:has(> table) { overflow-x: auto; }
+  .kpis { grid-template-columns: 1fr 1fr; }
+  .kpi .v { font-size: 20px; }
+  #toast { left: 12px; right: 12px; bottom: 12px; max-width: none; }
+  input, select, textarea { font-size: 16px; } /* evita o zoom automático do iOS ao focar */
+}

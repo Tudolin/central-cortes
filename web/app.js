@@ -20,6 +20,7 @@ const ui = {
   channel: localStorage.getItem("channel") || "",
   studioFilter: "PENDING_REVIEW",
   clipId: null,
+  kcol: localStorage.getItem("kcol") || "",
   channelId: null,
 };
 
@@ -120,8 +121,17 @@ function renderPipeline() {
       else list.sort((a, b) => b.score - a.score);
       items = list.map(clipCard);
     }
-    return `<div class="col" style="--c:${col.color}"><h3>${col.title}<b>${items.length}</b></h3><div class="cards">${items.join("")}</div></div>`;
+    return `<div class="col" data-col="${col.key}" style="--c:${col.color}"><h3>${col.title}<b>${items.length}</b></h3><div class="cards">${items.join("")}</div></div>`;
   }).join("");
+
+  // Celular: uma coluna por vez, escolhida nas abas acima do quadro.
+  const counts = COLUMNS.map((col) => $(`#kanban .col[data-col="${col.key}"] h3 b`)?.textContent ?? "0");
+  if (!COLUMNS.some((c) => c.key === ui.kcol)) ui.kcol = +counts[4] ? "review" : COLUMNS.find((c, i) => +counts[i])?.key ?? "queue";
+  $("#kchips").innerHTML = COLUMNS.map((col, i) =>
+    `<button data-kcol="${col.key}" style="--c:${col.color}" class="${col.key === ui.kcol ? "active" : ""}">${col.title.replace(" FFmpeg", "")} <b>${counts[i]}</b></button>`).join("");
+  $$("#kanban .col").forEach((el) => el.classList.toggle("on", el.dataset.col === ui.kcol));
+  const chip = $("#kchips .active"); // só rola a faixa de abas na horizontal (scrollIntoView mexeria na página)
+  if (chip) chip.parentElement.scrollLeft = chip.offsetLeft - chip.parentElement.clientWidth / 2 + chip.clientWidth / 2;
 
   const failedJobs = jobs.filter((j) => j.status === "FAILED");
   const failedClips = clips.filter((c) => c.status === "FAILED" || c.status === "PUBLISH_FAILED");
@@ -186,6 +196,8 @@ async function openClip(id) {
   const tr = await api(`/api/clips/${id}/transcript?start=${lo}&end=${hi}`);
   studioCtx = { clip, words: tr.words, bounds: tr.sentenceBounds, lo, hi, start: clip.start_s, end: clip.end_s, proxyStart: clip.proxy_start, hasProxy };
   renderStudioMain();
+  $(".studio").classList.add("open");
+  if (matchMedia("(max-width: 900px)").matches) scrollTo(0, 0);
 }
 
 function scheduleBlock(c) {
@@ -365,6 +377,7 @@ function renderStudioMain() {
   const v = encodeURIComponent(fresh.rendered_at || "");
 
   box.innerHTML = `
+    <button class="btn m-only back" id="b-back">← Lista de cortes</button>
     <div>
       <div class="phone">${rendered ? `<video src="/media/clip/${fresh.id}.mp4?v=${v}" controls playsinline></video>` : `<p class="empty">${fresh.status === "FAILED" ? "Falhou: " + esc(fresh.error) : "Renderizando…<br>" + esc(fresh.detail || "")}</p>`}</div>
       <div class="actions" style="margin-top:10px">
@@ -552,6 +565,7 @@ function nextPending(currentId) {
   else {
     studioCtx = null;
     ui.clipId = null;
+    $(".studio").classList.remove("open");
     $("#studio-main").innerHTML = `<p class="empty">Fila de revisão vazia. 🎉</p>`;
   }
 }
@@ -839,6 +853,7 @@ function render() {
   renderWorkers();
   renderPipeline();
   renderClipList();
+  $(".studio").classList.toggle("open", !!(ui.clipId && studioCtx));
   if (ui.tab === "studio" && studioCtx) {
     const fresh = state.clips.find((c) => c.id === studioCtx.clip.id);
     const prev = studioCtx.clip;
@@ -909,6 +924,19 @@ document.addEventListener("click", act(async (e) => {
     await api("/api/settings", { method: "PUT", body: Object.fromEntries(t.dataset.clearSettings.split(",").map((k) => [k, null])) });
     await loadSettings();
     await refresh();
+  }
+  if (t.dataset.kcol) {
+    ui.kcol = t.dataset.kcol;
+    localStorage.setItem("kcol", ui.kcol);
+    renderPipeline();
+  }
+  if (t.id === "b-back") {
+    studioCtx = null;
+    ui.clipId = null;
+    $(".studio").classList.remove("open");
+    $("#studio-main").innerHTML = `<p class="empty">Selecione um corte para revisar.</p>`;
+    renderClipList();
+    scrollTo(0, 0);
   }
   const chItem = t.closest("#channel-list li");
   if (chItem) {
