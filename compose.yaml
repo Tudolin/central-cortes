@@ -3,6 +3,7 @@ services:
     build: .
     image: cortes-hub:local
     container_name: cortes-hub
+    hostname: cortes-hub # fixo: o perfil do Chromium do robô guarda o hostname na trava
     restart: unless-stopped
     env_file: .env
     environment:
@@ -43,3 +44,4 @@ services:
       - ./browser:/config
       # Mesmo caminho do hub: o upload usa o arquivo do corte direto do disco.
       - ./data/media:/app/data/media:ro
+      - ./deploy/browser-unlock.sh:/custom-cont-init.d/10-unlock.sh:ro

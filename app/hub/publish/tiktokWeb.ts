@@ -35,7 +35,7 @@ async function dismissTips(page: Page) {
   }
 }
 
-export async function tiktokWebUpload(_ch: Channel, clip: Clip, file: string) {
+export async function tiktokWebUpload(_ch: Channel, clip: Clip, file: string, opts: { dryRun?: boolean } = {}) {
   const browser = await chromium.connectOverCDP(CDP, { timeout: 20_000 }).catch(() => {
     throw new Error("navegador do robô fora do ar (container cortes-browser)");
   });
@@ -46,7 +46,14 @@ export async function tiktokWebUpload(_ch: Channel, clip: Clip, file: string) {
     await page.waitForTimeout(3000);
     await needsHumanCheck(page);
 
-    await page.locator('input[type="file"]').first().setInputFiles(file, { timeout: 30_000 });
+    // O arquivo existe no mesmo caminho dentro do container do navegador (volume compartilhado):
+    // aponta o input direto para ele via CDP, sem transferir bytes (o Playwright limita a 50 MB por CDP).
+    await page.locator('input[type="file"]').first().waitFor({ state: "attached", timeout: 30_000 });
+    const cdp = await context.newCDPSession(page);
+    const { result } = (await cdp.send("Runtime.evaluate", { expression: `document.querySelector('input[type="file"]')` })) as { result: { objectId?: string } };
+    if (!result.objectId) throw new Error("campo de upload não encontrado");
+    await cdp.send("DOM.setFileInputFiles", { files: [file], objectId: result.objectId });
+    await cdp.detach().catch(() => {});
 
     // A legenda vem preenchida com o nome do arquivo: substitui pela legenda do corte.
     const editor = page.locator('.public-DraftEditor-content[contenteditable="true"]').first();
@@ -66,8 +73,24 @@ export async function tiktokWebUpload(_ch: Channel, clip: Clip, file: string) {
       .waitFor({ timeout: 10 * 60_000 });
     await needsHumanCheck(page);
 
+    // Visibilidade pública explícita (o padrão já é "Todos", mas não depende disso).
+    const visibility = page.locator('[data-e2e="video_visibility_container"]');
+    if (await visibility.isVisible().catch(() => false)) {
+      if (!/\b(Everyone|Todos)\b/.test(await visibility.innerText())) {
+        await visibility.locator("button").first().click();
+        await page.getByRole("option", { name: /^(Everyone|Todos)$/ }).first().click({ timeout: 10_000 });
+      }
+    }
+
     const post = page.locator('[data-e2e="post_video_button"]');
     await post.waitFor({ state: "visible", timeout: 60_000 });
+    if (opts.dryRun) {
+      // Teste: tudo pronto para publicar; descarta em vez de postar.
+      const caption = await editor.innerText();
+      await page.locator('[data-e2e="discard_post_button"]').click();
+      await page.getByRole("button", { name: /^(Descartar|Discard)$/ }).last().click({ timeout: 10_000 });
+      return { status: "OK" as const, external_id: "dry-run", url: "", caption };
+    }
     for (let i = 0; i < 60 && ((await post.isDisabled()) || (await post.getAttribute("aria-disabled")) === "true"); i++) {
       await page.waitForTimeout(2000);
     }
