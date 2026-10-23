@@ -4,7 +4,7 @@ import { settings } from "./settings.ts";
 import { all, get, getChannel, getClip, getJob, run, updateClip, type Channel, type Clip, type Platform, type Post } from "../db.ts";
 import { bus } from "../events.ts";
 import { buildResult } from "../pipeline/caption.ts";
-import { clipPath, removeClipFiles } from "./media.ts";
+import { clipPath } from "./media.ts";
 import { explainTikTokError, tiktokCreatorInfo, tiktokUpload, validateTikTokSettings, type TikTokPostSettings } from "./publish/tiktok.ts";
 import { youtubeUpload } from "./publish/youtube.ts";
 import { tg } from "./telegram.ts";
@@ -188,21 +188,11 @@ export async function tick() {
   }
 }
 
-/** Libera disco do notebook: mp4/proxy de publicados após N dias, rejeitados após 2 dias. */
-function cleanup() {
-  const old = all<Clip>(
-    `SELECT * FROM clips WHERE (status = 'PUBLISHED' AND published_at < ?) OR (status = 'REJECTED' AND updated_at < datetime('now', '-2 days'))`,
-    new Date(Date.now() - config.retentionDays * 86400_000).toISOString(),
-  );
-  for (const c of old) removeClipFiles(c.job_id, c.id, c.status === "PUBLISHED" ? ["mp4", "proxy", "preview"] : ["mp4", "jpg", "proxy", "preview"]);
-}
-
 export function startScheduler() {
   // Recupera publicação interrompida por reinício.
   run("UPDATE clips SET status = 'SCHEDULED' WHERE status = 'PUBLISHING'");
   for (const { id } of all<{ id: string }>("SELECT id FROM channels")) rebalance(id);
   setInterval(() => void tick(), 30_000);
-  setInterval(cleanup, 6 * 3600_000);
   bus.on("channel-saved", (id: string) => rebalance(id));
   void tick();
 }

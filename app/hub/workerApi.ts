@@ -6,6 +6,7 @@ import { bus } from "../events.ts";
 import { HttpError, must, route, serveFile } from "../http.ts";
 import { renderCaption } from "../pipeline/caption.ts";
 import { clipPath, transcriptPath, type ClipFile } from "./media.ts";
+import { diskState } from "./disk.ts";
 import { rebalance } from "./schedule.ts";
 import { tg } from "./telegram.ts";
 
@@ -47,6 +48,8 @@ route("POST", "/api/worker/heartbeat", (req, _r, _p, body: { task?: string }) =>
 route("POST", "/api/worker/claim", (req) => {
   const worker = workerOf(req);
   heartbeat(worker);
+  // Disco crítico: não aceita trabalho que gera arquivos novos no hub.
+  if (diskState().critical) return { type: "idle", reason: "disco do hub cheio" };
   const clip = get<Clip>("SELECT * FROM clips WHERE status = 'RENDER_QUEUED' ORDER BY id LIMIT 1");
   if (clip) {
     updateClip(clip.id, { status: "RENDERING", worker, error: "", detail: "" });

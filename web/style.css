@@ -233,3 +233,5 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
   .fields, .form { grid-template-columns: 1fr; }
 }
 .tt .en { color: var(--muted); font-size: 11px; font-weight: 400; }
+.disk-low { color: var(--accent); }
+.disk-crit { color: var(--red); font-weight: 700; }

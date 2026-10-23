@@ -8,9 +8,11 @@ if (config.role === "hub" || config.role === "all") {
   const { startReaper } = await import("./hub/workerApi.ts");
   const { startScheduler } = await import("./hub/schedule.ts");
   const { startTelegram } = await import("./hub/telegram.ts");
+  const { startDiskGuard } = await import("./hub/disk.ts");
   startServer();
   startReaper();
   startScheduler();
+  startDiskGuard();
   void startTelegram();
 }
 

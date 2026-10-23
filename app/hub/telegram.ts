@@ -148,6 +148,10 @@ export const tg = {
   async jobDone(j: Job, clips: number) {
     await send(`🎬 <b>${esc(j.title)}</b>: ${clips} corte(s) prontos para revisão.`);
   },
+
+  async alert(text: string) {
+    await send(esc(text));
+  },
 };
 
 // ---------- Escolhas do TikTok pelo Telegram (publicação direta) ----------

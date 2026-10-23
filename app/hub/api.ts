@@ -14,6 +14,7 @@ import { youtubeAuthUrl, youtubeConnect, youtubeRedirect } from "./publish/youtu
 import { approve, needsTikTokChoices, rebalance, reject } from "./schedule.ts";
 import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
 import { chatCandidates, telegramBotInfo, telegramTest, tg } from "./telegram.ts";
+import { diskState } from "./disk.ts";
 
 const publicChannel = (c: Channel) => {
   const creds = credentialsOf(c);
@@ -52,7 +53,7 @@ route("GET", "/api/state", () => {
     publicUrl: settings.publicUrl,
     timezone: config.timezone,
   };
-  return { channels, jobs, clips, posts, costs, daily, workers, integrations };
+  return { channels, jobs, clips, posts, costs, daily, workers, integrations, disk: diskState() };
 });
 
 // ---------- Integrações (chaves de app e bot), editáveis pelo dashboard ----------
