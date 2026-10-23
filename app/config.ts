@@ -47,6 +47,8 @@ export const config = {
     ytdlp: env("YTDLP_BIN", "yt-dlp"),
     whisper: env("WHISPER_BIN", "whisper-cli"),
   },
+  /** cookies.txt do YouTube (exportado do navegador) para quando o YouTube pede "confirme que você não é um robô". */
+  ytdlpCookies: resolve(ROOT, env("YTDLP_COOKIES", "data/youtube-cookies.txt")),
   whisperModel: resolve(ROOT, env("WHISPER_MODEL", "models/ggml-large-v3-turbo-q5_0.bin")),
   whisperThreads: num("WHISPER_THREADS", 8),
   whisperLanguage: env("WHISPER_LANGUAGE", "pt"),
