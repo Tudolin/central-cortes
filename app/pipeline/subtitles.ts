@@ -2,11 +2,30 @@ import type { Word } from "./transcribe.ts";
 
 export interface SubtitleOptions {
   font: string;
+  size: number;
+  color: string; // #RRGGBB
   highlightColor: string; // #RRGGBB
   maxWords: number;
   align: number;
   marginV: number;
+  /** Resolução do quadro (PlayRes) e fator de escala dos elementos (16:9 usa letras menores). */
+  res: { w: number; h: number; k: number };
+  /** Enquanto a faixa de título está na tela, a legenda vai para outra posição (layout dividido). */
+  bannerAvoid?: { align: number; marginV: number };
   banner?: BannerOptions;
+  lowerThird?: LowerThirdOptions;
+  credit?: { text: string; x: number; y: number };
+}
+
+export interface LowerThirdOptions {
+  name: string;
+  role: string;
+  color: string;
+  textColor: string;
+  at: number;
+  duration: number;
+  x: number; // canto inferior esquerdo do bloco
+  y: number;
 }
 
 export interface BannerOptions {
@@ -14,13 +33,17 @@ export interface BannerOptions {
   font: string;
   color: string; // fundo da faixa
   textColor: string;
-  centerY: number; // centro vertical da faixa no quadro 1080x1920
+  centerY: number; // centro vertical da faixa no quadro
+  centerX: number;
+  maxWidth: number;
+  k: number; // escala
   duration: number;
   seed: number; // borda "pincelada" determinística por corte
 }
 
 const BANNER_SECONDS = 2;
 const BANNER_FADE = 500; // ms
+export const BANNER_END = BANNER_SECONDS + BANNER_FADE / 1000;
 
 /** Quebra o título em linhas equilibradas de até `max` caracteres. */
 function wrapTitle(title: string, max: number): string[] {
@@ -50,18 +73,18 @@ function bannerEvents(b: BannerOptions): string[] {
     while (lim > 8 && wrapTitle(text, lim - 1).length === n) lim--;
     return wrapTitle(text, lim);
   };
-  let size = 108;
+  let size = Math.round(108 * b.k);
   let lines = balanced(15);
   if (lines.length > 3) {
-    size = 86;
+    size = Math.round(86 * b.k);
     lines = balanced(21);
   }
   const lineH = size * 1.0;
   const h = Math.round(lines.length * lineH + 50);
   // Largura acompanha a linha mais longa (Impact ≈ 0,5 em por caractere), como nas capas de corte.
   const textW = Math.max(...lines.map((l) => l.length)) * size * 0.5;
-  const w = Math.round(Math.min(960, Math.max(560, textW + 90)));
-  const x0 = Math.round(540 - w / 2);
+  const w = Math.round(Math.min(b.maxWidth, Math.max(560 * b.k, textW + 90 * b.k)));
+  const x0 = Math.round(b.centerX - w / 2);
   const x1 = x0 + w;
   const y0 = Math.round(b.centerY - h / 2);
   const y1 = y0 + h;
@@ -79,14 +102,31 @@ function bannerEvents(b: BannerOptions): string[] {
   for (let y = y1 - 30; y > y0; y -= 30) pts.push([x0 + rnd(9), y]);
   const shape = `m ${pts[0][0]} ${pts[0][1]} l ${pts.slice(1).map(([x, y]) => `${x} ${y}`).join(" ")}`;
 
-  const rot = `\\org(540,${Math.round(b.centerY)})\\frz2`;
+  const rot = `\\org(${Math.round(b.centerX)},${Math.round(b.centerY)})\\frz2`;
   // Só a abertura: 2 s visível + 0,5 s de fade out. O quadro de 1,5 s (miniatura/capa) ainda mostra o título.
   const end = assTime(Math.min(b.duration, BANNER_SECONDS + BANNER_FADE / 1000));
   const fade = `\\fad(0,${BANNER_FADE})`;
   return [
     `Dialogue: 0,0:00:00.00,${end},BannerBox,,0,0,0,,{\\an7\\pos(0,0)${rot}${fade}\\c${assColor(b.color)}\\bord0\\shad8\\4a&H80&\\p1}${shape}{\\p0}`,
-    `Dialogue: 1,0:00:00.00,${end},BannerText,,0,0,0,,{\\an5\\pos(540,${Math.round(b.centerY + 4)})${rot}${fade}\\fs${size}}${lines.join("\\N")}`,
+    `Dialogue: 1,0:00:00.00,${end},BannerText,,0,0,0,,{\\an5\\pos(${Math.round(b.centerX)},${Math.round(b.centerY + 4)})${rot}${fade}\\fs${size}}${lines.join("\\N")}`,
   ];
+}
+
+const clean = (s: string) => s.replace(/[{}\\]/g, "").replace(/\n/g, " ");
+
+/** Lower third: nome (caixa na cor do canal) sobre o cargo (caixa escura), entra e sai com fade. */
+function lowerThirdEvents(l: LowerThirdOptions, k: number): string[] {
+  const t0 = assTime(l.at);
+  const t1 = assTime(l.at + l.duration);
+  const fad = "\\fad(250,300)";
+  const out: string[] = [];
+  let y = l.y;
+  if (l.role) {
+    out.push(`Dialogue: 4,${t0},${t1},LTRole,,0,0,0,,{\\an1\\pos(${l.x},${y})${fad}}${clean(l.role)}`);
+    y -= Math.round(36 * k + 30 * k);
+  }
+  out.push(`Dialogue: 5,${t0},${t1},LTName,,0,0,0,,{\\an1\\pos(${l.x},${y})${fad}}${clean(l.name.toUpperCase())}`);
+  return out;
 }
 
 const norm = (s: string) =>
@@ -158,25 +198,39 @@ export function buildAss(words: Word[], keywords: string[], o: SubtitleOptions):
           return t;
         })
         .join(" ");
-      events.push(`Dialogue: 2,${assTime(start)},${assTime(end)},Cut,,0,0,0,,${text}`);
+      const style = o.bannerAvoid && o.banner && start < BANNER_END ? "CutAlt" : "Cut";
+      events.push(`Dialogue: 2,${assTime(start)},${assTime(end)},${style},,0,0,0,,${text}`);
     });
   });
   if (o.banner) events.unshift(...bannerEvents(o.banner));
+  if (o.lowerThird) events.push(...lowerThirdEvents(o.lowerThird, o.res.k));
+  if (o.credit) {
+    const end = assTime(Math.max(...words.map((w) => w.e), o.banner?.duration ?? 0, 1) + 1);
+    events.push(`Dialogue: 3,0:00:00.00,${end},Credit,,0,0,0,,{\\an7\\pos(${o.credit.x},${o.credit.y})}${clean(o.credit.text)}`);
+  }
+  const k = o.res.k;
+  const fs = (n: number) => Math.round(n * k);
   const bannerFont = o.banner?.font ?? o.font;
   const bannerText = assColor(o.banner?.textColor ?? "#FFD700");
+  const base = assColor(o.color);
+  const lt = { text: assColor(o.lowerThird?.textColor ?? "#FFFFFF"), box: assColor(o.lowerThird?.color ?? "#D7161E") };
 
   return `[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: ${o.res.w}
+PlayResY: ${o.res.h}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cut,${o.font},84,&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H99000000&,-1,0,0,0,100,100,1,0,1,6,3,${o.align},80,80,${o.marginV},1
+Style: Cut,${o.font},${fs(o.size)},${base},${base},&H00000000&,&H99000000&,-1,0,0,0,100,100,1,0,1,${fs(6)},${fs(3)},${o.align},80,80,${o.marginV},1
+Style: CutAlt,${o.font},${fs(o.size)},${base},${base},&H00000000&,&H99000000&,-1,0,0,0,100,100,1,0,1,${fs(6)},${fs(3)},${o.bannerAvoid?.align ?? o.align},80,80,${o.bannerAvoid?.marginV ?? o.marginV},1
 Style: BannerBox,${bannerFont},20,&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H80000000&,0,0,0,0,100,100,0,0,1,0,8,7,0,0,0,1
-Style: BannerText,${bannerFont},86,${bannerText},${bannerText},&H00000000&,&H00000000&,0,0,0,0,100,100,1,0,1,5,0,5,0,0,0,1
+Style: BannerText,${bannerFont},86,${bannerText},${bannerText},&H00000000&,&H00000000&,0,0,0,0,100,100,1,0,1,${fs(5)},0,5,0,0,0,1
+Style: LTName,${o.font},${fs(54)},${lt.text},${lt.text},${lt.box},${lt.box},-1,0,0,0,100,100,1,0,3,${fs(14)},0,1,0,0,0,1
+Style: LTRole,${o.font},${fs(36)},&H00FFFFFF&,&H00FFFFFF&,&H20101010&,&H20101010&,0,0,0,0,100,100,0,0,3,${fs(12)},0,1,0,0,0,1
+Style: Credit,${o.font},${fs(32)},&H00FFFFFF&,&H00FFFFFF&,&H60000000&,&H60000000&,0,0,0,0,100,100,0,0,3,${fs(10)},0,7,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

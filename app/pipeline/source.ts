@@ -14,6 +14,7 @@ export interface SourceInfo {
   videoId: string;
   videoUrl: string;
   title: string;
+  uploader?: string;
   duration: number;
 }
 
@@ -49,7 +50,7 @@ export async function fetchSource(jobId: number, source: string, onProgress: (ms
         "--merge-output-format", "mp4",
         "-o", out,
         "--force-overwrites",
-        "--print", "before_dl:%(id)s\t%(duration)s\t%(webpage_url)s\t%(title)s",
+        "--print", "before_dl:%(id)s\t%(duration)s\t%(webpage_url)s\t%(uploader)s\t%(title)s",
         source,
       ],
       {
@@ -57,9 +58,9 @@ export async function fetchSource(jobId: number, source: string, onProgress: (ms
         onStderr: (line) => line.startsWith("baixando") && onProgress(line.trim().replace(/\s+/g, " ").slice(0, 120)),
       },
     );
-    const infoLine = stdout.split(/\r?\n/).find((l) => l.split("\t").length >= 4) ?? "";
-    const [videoId = "", duration = "0", videoUrl = source, ...title] = infoLine.split("\t");
-    info = { path: out, videoId, videoUrl, title: title.join("\t"), duration: Number(duration) || (await probeDuration(out)) };
+    const infoLine = stdout.split(/\r?\n/).find((l) => l.split("\t").length >= 5) ?? "";
+    const [videoId = "", duration = "0", videoUrl = source, uploader = "", ...title] = infoLine.split("\t");
+    info = { path: out, videoId, videoUrl, uploader: uploader === "NA" ? "" : uploader, title: title.join("\t"), duration: Number(duration) || (await probeDuration(out)) };
   } else {
     if (!existsSync(source)) throw new Error(`Arquivo não encontrado: ${source}`);
     info = { path: source, videoId: "", videoUrl: "", title: basename(source).replace(/\.[^.]+$/, ""), duration: await probeDuration(source) };

@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { config } from "./config.ts";
+import { DEFAULT_TEMPLATES, type Template } from "./brand.ts";
 import { bus } from "./events.ts";
 
 mkdirSync(config.mediaDir, { recursive: true });
@@ -129,8 +130,42 @@ addColumns("clips", {
   // Escolhas do usuário para a publicação direta no TikTok (privacidade, interações, divulgação comercial),
   // registradas no momento da aprovação — exigência das diretrizes do Content Posting API.
   tiktok_settings: "TEXT",
+  // Identidade: modelo do job e sobrescritas do corte (ver brand.ts).
+  overrides: "TEXT NOT NULL DEFAULT '{}'",
+  aspect: "TEXT NOT NULL DEFAULT '9:16'",
+  teaser_start: "REAL NOT NULL DEFAULT 0",
+  teaser_end: "REAL NOT NULL DEFAULT 0",
+  speaker_name: "TEXT NOT NULL DEFAULT ''",
+  speaker_role: "TEXT NOT NULL DEFAULT ''",
 });
+addColumns("channels", { brand: "TEXT NOT NULL DEFAULT '{}'", default_template: "INTEGER NOT NULL DEFAULT 0" });
+addColumns("jobs", { template_id: "INTEGER NOT NULL DEFAULT 0", uploader: "TEXT NOT NULL DEFAULT ''" });
 db.exec(`
+CREATE TABLE IF NOT EXISTS assets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  ext TEXT NOT NULL,
+  size INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  aspect TEXT NOT NULL DEFAULT '9:16',
+  min_duration INTEGER NOT NULL DEFAULT 30,
+  max_duration INTEGER NOT NULL DEFAULT 90,
+  layout TEXT NOT NULL DEFAULT 'auto',
+  remove_silence INTEGER NOT NULL DEFAULT 1,
+  hook TEXT NOT NULL DEFAULT 'inicio',
+  use_items TEXT NOT NULL DEFAULT '["banner"]',
+  cta_at TEXT NOT NULL DEFAULT '',
+  sub_scale REAL NOT NULL DEFAULT 1,
+  instructions TEXT NOT NULL DEFAULT '',
+  position INTEGER NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS clips_status ON clips(status);
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
 `);
@@ -166,6 +201,8 @@ export interface Channel {
   title_banner: number;
   banner_color: string;
   banner_text_color: string;
+  brand: string; // JSON Brand
+  default_template: number;
   created_at: string;
 }
 
@@ -187,6 +224,8 @@ export interface Job {
   tokens_cache_write: number;
   cost_usd: number;
   worker: string;
+  template_id: number;
+  uploader: string;
   created_at: string;
   updated_at: string;
 }
@@ -218,6 +257,12 @@ export interface Clip {
   publish_attempts: number;
   tg_message_id: number;
   tiktok_settings: string | null;
+  overrides: string; // JSON Overrides
+  aspect: string;
+  teaser_start: number;
+  teaser_end: number;
+  speaker_name: string;
+  speaker_role: string;
   published_at: string | null;
   updated_at: string;
 }
@@ -285,3 +330,20 @@ if (!get("SELECT 1 FROM channels LIMIT 1")) {
     DEFAULT_TEMPLATE,
   );
 }
+
+/** Todo canal começa com os modelos padrão (Podcast vira o padrão). */
+export function ensureTemplates(channelId: string) {
+  if (get("SELECT 1 FROM templates WHERE channel_id = ?", channelId)) return;
+  DEFAULT_TEMPLATES.forEach((t, i) =>
+    run(
+      `INSERT INTO templates (channel_id, name, aspect, min_duration, max_duration, layout, remove_silence, hook, use_items, cta_at, sub_scale, instructions, position)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      channelId, t.name, t.aspect, t.min_duration, t.max_duration, t.layout, t.remove_silence, t.hook, t.use_items, t.cta_at, t.sub_scale, t.instructions, i,
+    ),
+  );
+  const first = get<{ id: number }>("SELECT id FROM templates WHERE channel_id = ? ORDER BY position, id LIMIT 1", channelId);
+  if (first) updateChannel(channelId, { default_template: first.id });
+}
+for (const { id } of all<{ id: string }>("SELECT id FROM channels")) ensureTemplates(id);
+
+export const getTemplate = (id: number) => get<Template>("SELECT * FROM templates WHERE id = ?", id);

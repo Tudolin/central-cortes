@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "../config.ts";
 import { settings } from "./settings.ts";
-import { all, credentialsOf, getChannel, getClip, getJob, run, setCredentials, updateChannel, updateClip, updateJob, type Channel, type Clip, type Job } from "../db.ts";
+import { all, credentialsOf, ensureTemplates, getChannel, getTemplate, getClip, getJob, run, setCredentials, updateChannel, updateClip, updateJob, type Channel, type Clip, type Job } from "../db.ts";
 import { bus } from "../events.ts";
 import { HttpError, MIME, must, route, serveFile } from "../http.ts";
 import { buildResult, renderCaption } from "../pipeline/caption.ts";
@@ -47,6 +47,8 @@ route("GET", "/api/state", () => {
      FROM jobs WHERE created_at >= date('now', '-30 days') GROUP BY day ORDER BY day`,
   );
   const workers = all("SELECT * FROM workers ORDER BY last_seen DESC");
+  const templates = all("SELECT * FROM templates ORDER BY channel_id, position, id");
+  const assets = all("SELECT * FROM assets ORDER BY id DESC");
   const integrations = {
     youtube: !!(settings.youtube.clientId && settings.youtube.clientSecret && settings.publicUrl),
     tiktok: !!(settings.tiktok.clientKey && settings.tiktok.clientSecret && settings.publicUrl),
@@ -55,7 +57,7 @@ route("GET", "/api/state", () => {
     timezone: config.timezone,
     robotScreen: robotScreenUrl(),
   };
-  return { channels, jobs, clips, posts, costs, daily, workers, integrations, disk: diskState() };
+  return { channels, jobs, clips, posts, costs, daily, workers, templates, assets, integrations, disk: diskState() };
 });
 
 // ---------- Integrações (chaves de app e bot), editáveis pelo dashboard ----------
@@ -131,11 +133,13 @@ route("GET", "/api/events", (req, res) => {
 
 // ---------- Jobs ----------
 
-route("POST", "/api/jobs", (_q, _r, _p, body: { channel_id: string; source: string }) => {
-  must(getChannel(body.channel_id), "Canal");
+route("POST", "/api/jobs", (_q, _r, _p, body: { channel_id: string; source: string; template_id?: number }) => {
+  const ch = must(getChannel(body.channel_id), "Canal");
+  const tpl = getTemplate(Number(body.template_id) || ch.default_template);
+  if (!tpl || tpl.channel_id !== ch.id) throw new HttpError(400, "Modelo de corte inválido para este canal");
   const sources = String(body.source ?? "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   if (!sources.length) throw new HttpError(400, "Informe ao menos uma URL ou caminho de arquivo");
-  const ids = sources.map((s) => Number(run("INSERT INTO jobs (channel_id, source) VALUES (?, ?)", body.channel_id, s).lastInsertRowid));
+  const ids = sources.map((s) => Number(run("INSERT INTO jobs (channel_id, source, template_id) VALUES (?, ?, ?)", body.channel_id, s, tpl.id).lastInsertRowid));
   bus.emit("change", { table: "jobs" });
   return { ids };
 });
@@ -185,7 +189,7 @@ route("GET", "/api/clips/:id/transcript", (req, _r, [id]) => {
   };
 });
 
-route("PATCH", "/api/clips/:id", (_q, _r, [id], body: Partial<Clip> & { keywords?: string[] | string; rerender?: boolean }) => {
+route("PATCH", "/api/clips/:id", (_q, _r, [id], body: Omit<Partial<Clip>, "overrides"> & { keywords?: string[] | string; rerender?: boolean; overrides?: object }) => {
   const clip = must(getClip(+id), "Corte");
   const job = getJob(clip.job_id)!;
   const ch = getChannel(job.channel_id)!;
@@ -200,11 +204,14 @@ route("PATCH", "/api/clips/:id", (_q, _r, [id], body: Partial<Clip> & { keywords
   }
   if (body.zoom != null) f.zoom = body.zoom ? 1 : 0;
   if (body.keywords != null) f.keywords = JSON.stringify(Array.isArray(body.keywords) ? body.keywords : String(body.keywords).split(",").map((s) => s.trim()).filter(Boolean));
+  if (body.overrides != null) f.overrides = JSON.stringify(body.overrides);
+  if (body.speaker_name != null) f.speaker_name = String(body.speaker_name).slice(0, 60);
+  if (body.speaker_role != null) f.speaker_role = String(body.speaker_role).slice(0, 80);
   if (body.caption != null) f.caption = String(body.caption);
   else if (f.title != null || f.start_s != null) {
     f.caption = renderCaption(ch.caption_template, job, String(f.title ?? clip.title), Number(f.start_s ?? clip.start_s));
   }
-  const visual = ["start_s", "end_s", "layout", "zoom", "keywords", "title"].some((k) => k in f && f[k] !== (clip as any)[k]);
+  const visual = ["start_s", "end_s", "layout", "zoom", "keywords", "title", "overrides", "speaker_name", "speaker_role"].some((k) => k in f && f[k] !== (clip as any)[k]);
   if ((body.rerender || visual) && !["PUBLISHED", "PUBLISHING"].includes(clip.status)) {
     // Edição muda o conteúdo: precisa de nova aprovação.
     Object.assign(f, { status: "RENDER_QUEUED", error: "", scheduled_at: null, approved_at: null, schedule_locked: 0 });
@@ -270,7 +277,7 @@ const CHANNEL_FIELDS = [
   "name", "niche", "tone", "extra_instructions", "caption_template", "model", "effort", "clips_target",
   "min_duration", "max_duration", "highlight_color", "max_words_per_frame", "webhook_url",
   "schedule_slots", "publish_targets", "youtube_privacy", "youtube_category", "tiktok_mode", "tiktok_privacy",
-  "title_banner", "banner_color", "banner_text_color",
+  "title_banner", "banner_color", "banner_text_color", "default_template",
 ] as const;
 
 route("POST", "/api/channels", (_q, _r, _p, body: Partial<Channel>) => {
@@ -279,6 +286,7 @@ route("POST", "/api/channels", (_q, _r, _p, body: Partial<Channel>) => {
   if (getChannel(id)) throw new HttpError(409, "Canal já existe");
   const base = getChannel("ideias_em_comum");
   run("INSERT INTO channels (id, name, caption_template) VALUES (?, ?, ?)", id, body.name, body.caption_template ?? base?.caption_template ?? "🎙️ {titulo_corte}\n\n📺 {url_com_timestamp}");
+  ensureTemplates(id);
   return saveChannel(id, body);
 });
 

@@ -25,6 +25,7 @@
     <section id="tab-pipeline" class="tab active">
       <form id="new-job" class="new-job">
         <select name="channel_id" aria-label="Canal" required></select>
+        <select name="template_id" aria-label="Modelo de corte" title="Modelo de corte"></select>
         <textarea name="source" rows="1" placeholder="URL do YouTube (ou caminho de arquivo no servidor). Várias? Uma por linha." required></textarea>
         <button class="btn primary" type="submit">Processar</button>
       </form>
@@ -60,6 +61,8 @@
         </aside>
         <div class="channel-main">
           <section id="integrations" class="card"></section>
+          <section id="brand" class="card"></section>
+          <section id="templates" class="card"></section>
           <form id="channel-form" class="card form"></form>
         </div>
       </div>

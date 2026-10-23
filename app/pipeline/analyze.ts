@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config, PRICING, type Effort } from "../config.ts";
+import type { Template } from "../brand.ts";
 import type { Channel, Layout } from "../db.ts";
 import { compactTranscript, type Transcript } from "./transcribe.ts";
 
@@ -14,6 +15,10 @@ export interface CutProposal {
   layout: Layout;
   zoom: boolean;
   keywords: string[];
+  teaser_start: number;
+  teaser_end: number;
+  speaker_name: string;
+  speaker_role: string;
 }
 
 export interface Usage {
@@ -37,7 +42,10 @@ const OUTPUT_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["start_seconds", "end_seconds", "score_viral", "gancho_impacto", "titulo_corte", "layout_type", "zoom_on_emphasis", "palavras_destaque"],
+        required: [
+          "start_seconds", "end_seconds", "score_viral", "gancho_impacto", "titulo_corte", "layout_type", "zoom_on_emphasis", "palavras_destaque",
+          "teaser_start_seconds", "teaser_end_seconds", "falante_nome", "falante_cargo",
+        ],
         properties: {
           start_seconds: { type: "number" },
           end_seconds: { type: "number" },
@@ -47,13 +55,24 @@ const OUTPUT_SCHEMA = {
           layout_type: { type: "string", enum: ["single_speaker", "split_screen", "screen_share_focus"] },
           zoom_on_emphasis: { type: "boolean" },
           palavras_destaque: { type: "array", items: { type: "string" } },
+          teaser_start_seconds: { type: "number" },
+          teaser_end_seconds: { type: "number" },
+          falante_nome: { type: "string" },
+          falante_cargo: { type: "string" },
         },
       },
     },
   },
 } as const;
 
-function systemPrompt(ch: Channel): string {
+/** Limites do modelo de corte (ou do canal, sem modelo). */
+const limits = (ch: Channel, tpl: Template | null) => ({ min: tpl?.min_duration ?? ch.min_duration, max: tpl?.max_duration ?? ch.max_duration });
+
+function systemPrompt(ch: Channel, tpl: Template | null): string {
+  const { min, max } = limits(ch, tpl);
+  const layoutRule = tpl && tpl.layout !== "auto"
+    ? `- layout_type: este formato usa sempre "${tpl.layout}".`
+    : `- layout_type: "single_speaker" quando uma pessoa domina o trecho; "split_screen" quando há troca direta entre duas pessoas (debate, entrevista com réplica); "screen_share_focus" quando o falante comenta tela, slide, gráfico ou vídeo.`;
   return `Você é o motor de curadoria de uma plataforma de cortes virais para TikTok, YouTube Shorts e Instagram Reels.
 
 <canal>
@@ -62,12 +81,17 @@ Nicho / posicionamento: ${ch.niche}
 Tom de voz: ${ch.tone}
 ${ch.extra_instructions ? `Instruções adicionais: ${ch.extra_instructions}` : ""}
 </canal>
+${tpl ? `
+<formato nome="${tpl.name}">
+${tpl.instructions}
+</formato>
+` : ""}
 
 Você recebe a transcrição de um vídeo longo. Cada linha é "SEGUNDO_INICIAL|texto".
 Selecione os trechos com maior potencial de engajamento para esse canal e esse público.
 
 Critérios de um bom corte:
-- Duração entre ${ch.min_duration} e ${ch.max_duration} segundos.
+- Duração entre ${min} e ${max} segundos.
 - Começo, meio e fim claros: abre com um gancho que se sustenta sem contexto prévio (pergunta, provocação, tese forte), desenvolve o argumento e fecha numa conclusão ou frase de efeito. Nunca comece no meio de uma frase nem termine antes da conclusão do raciocínio.
 - Prefira teses contundentes, dados concretos, confrontos de ideias e momentos que gerem comentário e compartilhamento.
 - Cortes não podem se sobrepor.
@@ -77,14 +101,16 @@ Para cada corte:
 - score_viral: 0 a 100, calibrado (90+ só para trechos excepcionais).
 - gancho_impacto: uma frase explicando por que o trecho prende a atenção.
 - titulo_corte: título em CAIXA ALTA, até 70 caracteres, chamativo mas fiel ao que é dito (sem inventar fatos).
-- layout_type: "single_speaker" quando uma pessoa domina o trecho; "split_screen" quando há troca direta entre duas pessoas (debate, entrevista com réplica); "screen_share_focus" quando o falante comenta tela, slide, gráfico ou vídeo.
+${layoutRule}
 - zoom_on_emphasis: true quando há picos de ênfase que merecem punch-in.
 - palavras_destaque: 4 a 10 palavras exatamente como aparecem na transcrição, as de maior impacto (para destacar na legenda).
+- teaser_start_seconds / teaser_end_seconds: a frase mais forte DENTRO do corte, de 2 a 6 segundos, que funcionaria como chamada repetida no início do vídeo. Use 0 e 0 se nenhuma frase se sustenta sozinha.
+- falante_nome / falante_cargo: nome e cargo/função de quem fala no trecho, só se forem ditos explicitamente na transcrição ou no título do vídeo (ex.: "Fernando Haddad" / "Ministro da Fazenda"). Nunca deduza nem invente; na dúvida, use "".
 
 Retorne até ${ch.clips_target} cortes, do maior para o menor score. Se o vídeo não tiver material bom, retorne menos.`;
 }
 
-export async function analyze(ch: Channel, t: Transcript, title: string): Promise<{ cuts: CutProposal[]; usage: Usage }> {
+export async function analyze(ch: Channel, tpl: Template | null, t: Transcript, title: string): Promise<{ cuts: CutProposal[]; usage: Usage }> {
   const model = ch.model || config.defaultModel;
   const effort = (ch.effort || config.defaultEffort) as Effort;
 
@@ -96,7 +122,7 @@ export async function analyze(ch: Channel, t: Transcript, title: string): Promis
       fallbacks: "default",
       output_config: { effort, format: { type: "json_schema", schema: OUTPUT_SCHEMA } },
       // System estável por canal → cache entre vídeos do mesmo canal.
-      system: [{ type: "text", text: systemPrompt(ch), cache_control: { type: "ephemeral" } }],
+      system: [{ type: "text", text: systemPrompt(ch, tpl), cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: `Título do vídeo: ${title}\n\n<transcricao>\n${compactTranscript(t)}\n</transcricao>` }],
     })
     .finalMessage();
@@ -117,12 +143,17 @@ export async function analyze(ch: Channel, t: Transcript, title: string): Promis
       layout_type: Layout;
       zoom_on_emphasis: boolean;
       palavras_destaque: string[];
+      teaser_start_seconds: number;
+      teaser_end_seconds: number;
+      falante_nome: string;
+      falante_cargo: string;
     }[];
   };
 
+  const { min, max } = limits(ch, tpl);
   const cuts: CutProposal[] = [];
   for (const c of parsed.cortes) {
-    const snapped = snapToSentences(t, c.start_seconds, c.end_seconds, ch.min_duration, ch.max_duration);
+    const snapped = snapToSentences(t, c.start_seconds, c.end_seconds, min, max);
     if (!snapped) continue;
     if (cuts.some((o) => snapped.start_s < o.end_s && snapped.end_s > o.start_s)) continue;
     cuts.push({
@@ -130,9 +161,12 @@ export async function analyze(ch: Channel, t: Transcript, title: string): Promis
       score: Math.max(0, Math.min(100, Math.round(c.score_viral))),
       hook: c.gancho_impacto,
       title: c.titulo_corte.toUpperCase(),
-      layout: c.layout_type,
+      layout: tpl && tpl.layout !== "auto" ? tpl.layout : c.layout_type,
       zoom: c.zoom_on_emphasis,
       keywords: c.palavras_destaque,
+      ...snapTeaser(t, c.teaser_start_seconds, c.teaser_end_seconds, snapped.start_s, snapped.end_s),
+      speaker_name: c.falante_nome.trim().slice(0, 60),
+      speaker_role: c.falante_cargo.trim().slice(0, 80),
     });
   }
   cuts.sort((a, b) => b.score - a.score);
@@ -186,3 +220,15 @@ export function snapToSentences(t: Transcript, start: number, end: number, minDu
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Teaser ajustado às palavras (2–8 s, dentro do corte); 0/0 quando não serve. */
+function snapTeaser(t: Transcript, start: number, end: number, cutStart: number, cutEnd: number) {
+  const none = { teaser_start: 0, teaser_end: 0 };
+  if (!(end > start)) return none;
+  const inside = t.words.filter((w) => w.s >= Math.max(cutStart, start - 0.4) && w.e <= Math.min(cutEnd, end + 0.4));
+  if (!inside.length) return none;
+  const s = inside[0].s;
+  const e = inside.at(-1)!.e;
+  if (e - s < 1.5 || e - s > 8) return none;
+  return { teaser_start: round2(Math.max(cutStart, s - 0.1)), teaser_end: round2(Math.min(cutEnd, e + 0.2)) };
+}

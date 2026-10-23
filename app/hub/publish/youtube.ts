@@ -45,7 +45,7 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
   const { access_token } = await tokenRequest({ refresh_token: refresh, grant_type: "refresh_token" });
 
   const base = clip.title.replace(/[<>]/g, "").trim();
-  const title = base.length <= 91 ? `${base} #Shorts` : base.slice(0, 100);
+  const title = clip.aspect === "16:9" || base.length > 91 ? base.slice(0, 100) : `${base} #Shorts`;
   const size = statSync(file).size;
   const init = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
     method: "POST",

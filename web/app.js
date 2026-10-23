@@ -14,7 +14,7 @@ const when = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { weekday: "s
 const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 const PLATFORM = { youtube: "▶ YouTube", tiktok: "♪ TikTok" };
 
-let state = { channels: [], jobs: [], clips: [], posts: [], costs: [], daily: [], workers: [], integrations: {} };
+let state = { channels: [], jobs: [], clips: [], posts: [], costs: [], daily: [], workers: [], templates: [], assets: [], integrations: {} };
 const ui = {
   tab: localStorage.getItem("tab") || "pipeline",
   channel: localStorage.getItem("channel") || "",
@@ -422,6 +422,7 @@ function renderStudioMain() {
         <label class="full">Palavras em destaque (vírgula)<input id="f-kw" value="${esc(kw.join(", "))}"></label>
         <label class="full">Legenda social (descrição no YouTube, legenda no TikTok) <textarea id="f-caption">${esc(fresh.caption)}</textarea></label>
       </div>
+      ${montageBlock(fresh)}
       <div class="actions">
         <button class="btn primary" id="b-save" ${["PUBLISHED", "PUBLISHING"].includes(fresh.status) ? "disabled" : ""}>Salvar e re-renderizar</button>
         <button class="btn" id="b-save-caption">Salvar só a legenda</button>
@@ -506,6 +507,7 @@ function wireStudio() {
       await api(`/api/clips/${id}`, { method: "PATCH", body: {
         start_s: studioCtx.start, end_s: studioCtx.end, title: $("#f-title").value, layout: $("#f-layout").value,
         zoom: $("#f-zoom").value === "1", keywords: $("#f-kw").value, rerender: true,
+        overrides: collectOverrides(studioCtx.clip), speaker_name: $("#o-name").value.trim(), speaker_role: $("#o-role").value.trim(),
       } });
       toast("Salvo — re-renderizando no worker");
     }
@@ -582,8 +584,8 @@ const CH_FIELDS = [
   ["model", "Modelo Claude (vazio = padrão do worker)", { list: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] }],
   ["effort", "Esforço (low…max, vazio = padrão)", { list: ["low", "medium", "high", "xhigh", "max"] }],
   ["clips_target", "Máx. cortes por vídeo", { type: "number" }],
-  ["min_duration", "Duração mínima (s)", { type: "number" }],
-  ["max_duration", "Duração máxima (s)", { type: "number" }],
+  ["min_duration", "Duração mínima sem modelo (s)", { type: "number" }],
+  ["max_duration", "Duração máxima sem modelo (s)", { type: "number" }],
   ["h", "Legendas"],
   ["highlight_color", "Cor de destaque", { type: "color" }],
   ["max_words_per_frame", "Palavras por quadro (2–4)", { type: "number" }],
@@ -773,6 +775,10 @@ function renderChannels() {
   const ch = state.channels.find((c) => c.id === ui.channelId) || (ui.channelId === "" ? { id: "", name: "", credentials: [], publish_targets: '["youtube","tiktok"]', schedule_slots: "12:00,18:30,21:00" } : null);
   const form = $("#channel-form");
   if (!ch) return (form.innerHTML = "");
+  if (ch.id) {
+    renderBrand();
+    renderTemplates();
+  }
   if (form.dataset.for === ch.id && form.contains(document.activeElement)) return; // não sobrescreve enquanto edita
   form.dataset.for = ch.id;
   form.innerHTML =
@@ -801,6 +807,257 @@ async function saveChannelForm(e) {
   toast("Canal salvo");
   await refresh();
 }
+
+// ---------------- Identidade do canal e modelos de corte ----------------
+
+const USE_LABELS = {
+  banner: "Faixa de título", intro: "Vinheta de abertura", outro: "Vinheta de encerramento", cta: "Pedido de inscrição",
+  logo: "Logo", music: "Trilha de fundo", lower_third: "Lower third (nome e cargo)", credit: "Crédito da fonte",
+};
+const LAYOUTS = [["auto", "Automático (a IA decide)"], ["single_speaker", "Uma pessoa"], ["split_screen", "Tela dividida"], ["screen_share_focus", "Conteúdo + quem comenta"]];
+const ASSET_SLOTS = [
+  ["intro", "Vinheta de abertura", "video/*,.mkv"],
+  ["outro", "Vinheta de encerramento", "video/*,.mkv"],
+  ["cta", "Pedido de inscrição (animação)", "video/*,.webm,.mov,image/png,image/gif"],
+  ["logo", "Logo / marca d'água", "image/png,image/jpeg,image/webp"],
+  ["music", "Trilha de fundo", "audio/*"],
+];
+const useOf = (t) => new Set(JSON.parse(t?.use_items || '["banner"]'));
+const brandOf = (ch) => JSON.parse(ch?.brand || "{}");
+const opt = (pairs, cur) => pairs.map(([v, l]) => `<option value="${v}" ${String(cur) === v ? "selected" : ""}>${esc(l)}</option>`).join("");
+const openTpls = new Set();
+
+function fillTemplateSelect() {
+  const chId = $("#new-job select[name=channel_id]").value;
+  const sel = $("#new-job select[name=template_id]");
+  const ch = state.channels.find((c) => c.id === chId);
+  const prev = sel.dataset.ch === chId ? sel.value : "";
+  sel.innerHTML = state.templates.filter((t) => t.channel_id === chId)
+    .map((t) => `<option value="${t.id}">${esc(t.name)}${t.id === ch?.default_template ? " (padrão)" : ""}</option>`).join("");
+  sel.value = prev || String(ch?.default_template || "");
+  sel.dataset.ch = chId;
+}
+
+/** Modelo usado pelo corte: o do job, ou o padrão do canal para jobs antigos. */
+function tplOf(c) {
+  const job = state.jobs.find((j) => j.id === c.job_id);
+  const ch = state.channels.find((x) => x.id === c.channel_id);
+  return state.templates.find((t) => t.id === (job?.template_id || ch?.default_template));
+}
+
+function montageBlock(c) {
+  const t = tplOf(c);
+  const base = useOf(t);
+  const ov = JSON.parse(c.overrides || "{}");
+  const on = (k) => ov.use?.[k] ?? base.has(k);
+  const silence = ov.remove_silence ?? !!t?.remove_silence;
+  const teaserOk = c.teaser_end > c.teaser_start;
+  const teaser = (ov.teaser ?? t?.hook === "teaser") && teaserOk;
+  return `<details class="card montage" ${Object.keys(ov).length ? "open" : ""}>
+    <summary><b>Montagem deste corte</b> <span class="muted">modelo ${esc(t?.name ?? "—")} · ${esc(c.aspect || "9:16")} · mude só o que for diferente aqui</span></summary>
+    <div class="checks wrap">
+      ${Object.entries(USE_LABELS).map(([k, l]) => `<label><input type="checkbox" data-use="${k}" ${on(k) ? "checked" : ""}> ${l}</label>`).join("")}
+      <label><input type="checkbox" id="o-silence" ${silence ? "checked" : ""}> Remover silêncios</label>
+      <label class="${teaserOk ? "" : "muted"}"><input type="checkbox" id="o-teaser" ${teaser ? "checked" : ""} ${teaserOk ? "" : "disabled"}>
+        Teaser no início ${teaserOk ? `(${(c.teaser_end - c.teaser_start).toFixed(1)}s)` : "(a IA não sugeriu)"}</label>
+    </div>
+    <div class="fields">
+      <label>Pedido de inscrição em <input id="o-cta" value="${esc(ov.cta_at ?? "")}" placeholder="${esc(t?.cta_at || "padrão do canal")} (70%, fim, -5, 12)"></label>
+      <label>Nome no lower third <input id="o-name" value="${esc(c.speaker_name || "")}" placeholder="vazio = sem lower third"></label>
+      <label class="full">Cargo / função <input id="o-role" value="${esc(c.speaker_role || "")}"></label>
+    </div>
+  </details>`;
+}
+
+/** Só guarda o que difere do modelo: mudar o modelo depois continua valendo para o resto. */
+function collectOverrides(c) {
+  const t = tplOf(c);
+  const base = useOf(t);
+  const ov = {};
+  for (const el of $$("[data-use]")) if (el.checked !== base.has(el.dataset.use)) (ov.use ??= {})[el.dataset.use] = el.checked;
+  const s = $("#o-silence").checked;
+  if (s !== !!t?.remove_silence) ov.remove_silence = s;
+  const te = $("#o-teaser");
+  if (!te.disabled && te.checked !== (t?.hook === "teaser")) ov.teaser = te.checked;
+  const cta = $("#o-cta").value.trim();
+  if (cta) ov.cta_at = cta;
+  return ov;
+}
+
+function renderBrand() {
+  const box = $("#brand");
+  const ch = state.channels.find((c) => c.id === ui.channelId);
+  if (!ch) return (box.innerHTML = "");
+  const assets = state.assets.filter((a) => a.channel_id === ch.id);
+  const sig = ch.id + ch.brand + assets.map((a) => a.id).join();
+  if (box.dataset.sig === sig || (box.dataset.for === ch.id && box.contains(document.activeElement))) return;
+  box.dataset.sig = sig;
+  box.dataset.for = ch.id;
+  const b = brandOf(ch);
+  const active = { intro: b.intro, outro: b.outro, cta: b.cta?.asset, logo: b.logo?.asset, music: b.music?.asset };
+  const zones = b.safe_zones ?? JSON.parse(ch.publish_targets || "[]").filter((z) => z !== "reels");
+  const extra = {
+    cta: `<label>Momento <input name="cta_at" value="${esc(b.cta?.at ?? "70%")}" placeholder="70%, fim, -5 ou 12"></label>
+      <label>Posição <select name="cta_position">${opt([["bottom", "Acima da legenda"], ["center", "Centro"], ["top", "Topo"]], b.cta?.position ?? "bottom")}</select></label>
+      <label>Largura (fração da tela) <input name="cta_scale" type="number" step="0.05" min="0.1" max="1" value="${b.cta?.scale ?? 0.6}"></label>
+      <label>Fundo <select name="cta_key">${opt([["none", "Transparente (.webm/.mov/.png)"], ["green", "Verde (chroma key)"]], b.cta?.key ?? "none")}</select></label>`,
+    logo: `<label>Posição <select name="logo_position">${opt([["top-right", "Topo direita"], ["top-left", "Topo esquerda"], ["bottom-right", "Baixo direita"], ["bottom-left", "Baixo esquerda"]], b.logo?.position ?? "top-right")}</select></label>
+      <label>Opacidade (0–1) <input name="logo_opacity" type="number" step="0.05" min="0.1" max="1" value="${b.logo?.opacity ?? 0.85}"></label>
+      <label>Largura (fração da tela) <input name="logo_scale" type="number" step="0.01" min="0.05" max="0.5" value="${b.logo?.scale ?? 0.16}"></label>`,
+    music: `<label>Volume (0–1) <input name="music_volume" type="number" step="0.01" min="0" max="1" value="${b.music?.volume ?? 0.1}"></label>`,
+  };
+  box.innerHTML = `<form id="brand-form">
+    <h3 class="integ-title">Identidade visual e assets</h3>
+    <p class="muted help">Configure uma vez e todo corte novo já sai no padrão. Cada modelo de corte escolhe quais destes itens entram, e cada corte pode mudar isso no Estúdio.</p>
+    <div class="asset-grid">${ASSET_SLOTS.map(([kind, label, accept]) => {
+      const mine = assets.filter((a) => a.kind === kind);
+      const cur = active[kind];
+      return `<div class="asset"><b>${label}</b>
+        <select name="a_${kind}"><option value="">— nenhum —</option>${mine.map((a) => `<option value="${a.id}" ${a.id === cur ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select>
+        <div class="actions"><label class="btn small">Enviar arquivo<input type="file" hidden data-upload="${kind}" accept="${accept}"></label>
+          ${cur ? `<a class="btn small" href="/media/asset/${cur}" target="_blank">Ver</a><button type="button" class="btn small danger" data-del-asset="${cur}">Apagar</button>` : ""}</div>
+        ${extra[kind] ?? ""}</div>`;
+    }).join("")}</div>
+    <div class="form">
+      <h3>Legendas</h3>
+      <label>Fonte (instalada no PC do worker) <input name="sub_font" value="${esc(b.subtitle?.font ?? "")}" placeholder="padrão do worker" list="dl-fonts"><datalist id="dl-fonts">${["Arial Black", "Montserrat ExtraBold", "Impact", "Bebas Neue", "Anton"].map((f) => `<option value="${f}">`).join("")}</datalist></label>
+      <label>Tamanho <input name="sub_size" type="number" min="40" max="160" value="${b.subtitle?.size ?? 84}"></label>
+      <label>Cor do texto <input name="sub_color" type="color" value="${b.subtitle?.color ?? "#FFFFFF"}"></label>
+      <label>Cor de destaque <input type="color" value="${ch.highlight_color}" disabled title="Edite em Legendas, no formulário do canal abaixo"></label>
+      <h3>Lower third</h3>
+      <label>Cor da caixa do nome <input name="lt_color" type="color" value="${b.lower_third?.color ?? ch.banner_color}"></label>
+      <label>Cor do texto <input name="lt_text" type="color" value="${b.lower_third?.text_color ?? "#FFFFFF"}"></label>
+      <label>Duração na tela (s) <input name="lt_duration" type="number" min="1" max="15" value="${b.lower_third?.duration ?? 4}"></label>
+      <h3>Zonas seguras</h3>
+      <div class="full checks wrap">${[["tiktok", "TikTok"], ["youtube", "YouTube Shorts"], ["reels", "Instagram Reels"]].map(([z, l]) => `<label><input type="checkbox" name="zone_${z}" ${zones.includes(z) ? "checked" : ""}> ${l}</label>`).join("")}</div>
+      <div class="full muted" style="font-size:12px">Legenda, logo, CTA e lower third ficam fora das áreas cobertas pela interface das plataformas marcadas.</div>
+      <div class="full actions"><button class="btn primary" type="submit">Salvar identidade</button></div>
+    </div>
+  </form>`;
+}
+
+async function saveBrand(e) {
+  e.preventDefault();
+  const fd = Object.fromEntries(new FormData(e.target));
+  const id = (k) => (fd[`a_${k}`] ? Number(fd[`a_${k}`]) : null);
+  await api(`/api/channels/${encodeURIComponent(ui.channelId)}/brand`, { method: "PUT", body: {
+    intro: id("intro"), outro: id("outro"),
+    cta: { asset: id("cta"), at: fd.cta_at, position: fd.cta_position, scale: Number(fd.cta_scale), key: fd.cta_key },
+    logo: { asset: id("logo"), position: fd.logo_position, opacity: Number(fd.logo_opacity), scale: Number(fd.logo_scale) },
+    music: { asset: id("music"), volume: Number(fd.music_volume) },
+    subtitle: { font: fd.sub_font, size: Number(fd.sub_size), color: fd.sub_color },
+    lower_third: { color: fd.lt_color, text_color: fd.lt_text, duration: Number(fd.lt_duration) },
+    safe_zones: ["tiktok", "youtube", "reels"].filter((z) => fd[`zone_${z}`]),
+  } });
+  $("#brand").dataset.sig = "";
+  toast("Identidade salva — vale para os próximos renders");
+  await refresh();
+}
+
+async function uploadAsset(input) {
+  const file = input.files[0];
+  if (!file) return;
+  toast(`Enviando ${file.name}…`);
+  const r = await fetch(`/api/channels/${encodeURIComponent(ui.channelId)}/assets?kind=${input.dataset.upload}&name=${encodeURIComponent(file.name)}`, {
+    method: "POST", headers: { "content-type": "application/octet-stream" }, body: file,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  $("#brand").dataset.sig = "";
+  toast(`${file.name} enviado e ativado`);
+  await refresh();
+}
+
+function renderTemplates() {
+  const box = $("#templates");
+  const ch = state.channels.find((c) => c.id === ui.channelId);
+  if (!ch) return (box.innerHTML = "");
+  const list = state.templates.filter((t) => t.channel_id === ch.id);
+  const sig = ch.id + ch.default_template + JSON.stringify(list);
+  if (box.dataset.sig === sig || (box.dataset.for === ch.id && box.contains(document.activeElement))) return;
+  box.dataset.sig = sig;
+  box.dataset.for = ch.id;
+  box.innerHTML = `<h3 class="integ-title">Modelos de corte</h3>
+    <p class="muted help">Cada vídeo enviado no Pipeline usa um modelo. Ele define formato, duração, layout, se corta silêncios, como abre e quais itens da identidade entram.</p>
+    ${list.map((t) => {
+      const use = useOf(t);
+      const layout = LAYOUTS.find(([v]) => v === t.layout)?.[1] ?? t.layout;
+      return `<details class="tpl" data-tpl-open="${t.id}" ${openTpls.has(t.id) ? "open" : ""}>
+        <summary><b>${esc(t.name)}</b> ${t.id === ch.default_template ? '<span class="tag">padrão</span>' : ""} <span class="muted">${t.aspect} · ${t.min_duration}–${t.max_duration}s · ${esc(layout)}</span></summary>
+        <form class="form tpl-form" data-tpl="${t.id}">
+          <label>Nome <input name="name" value="${esc(t.name)}"></label>
+          <label>Proporção <select name="aspect">${opt([["9:16", "9:16 (vertical)"], ["16:9", "16:9 (horizontal)"]], t.aspect)}</select></label>
+          <label>Duração mínima (s) <input name="min_duration" type="number" value="${t.min_duration}"></label>
+          <label>Duração máxima (s) <input name="max_duration" type="number" value="${t.max_duration}"></label>
+          <label>Layout <select name="layout">${opt(LAYOUTS, t.layout)}</select></label>
+          <label>Abertura <select name="hook">${opt([["inicio", "Começa no gancho"], ["teaser", "Teaser: repete a fala mais forte no início"]], t.hook)}</select></label>
+          <label>Tamanho da legenda (×) <input name="sub_scale" type="number" step="0.05" min="0.5" max="2" value="${t.sub_scale}"></label>
+          <label>Pedido de inscrição em <input name="cta_at" value="${esc(t.cta_at)}" placeholder="padrão do canal"></label>
+          <div class="full checks wrap">
+            <label><input type="checkbox" name="remove_silence" ${t.remove_silence ? "checked" : ""}> Remover silêncios</label>
+            ${Object.entries(USE_LABELS).map(([k, l]) => `<label><input type="checkbox" name="use_${k}" ${use.has(k) ? "checked" : ""}> ${l}</label>`).join("")}
+          </div>
+          <label class="full">Instruções para a IA neste formato <textarea name="instructions" rows="3">${esc(t.instructions)}</textarea></label>
+          <div class="full actions"><button class="btn primary" type="submit">Salvar modelo</button>
+            ${t.id !== ch.default_template ? `<button type="button" class="btn" data-tpl-default="${t.id}">Tornar padrão</button>` : ""}
+            <button type="button" class="btn danger" data-tpl-del="${t.id}">Apagar</button></div>
+        </form></details>`;
+    }).join("")}
+    <button class="btn" type="button" id="new-template">+ Novo modelo</button>`;
+}
+
+async function saveTemplate(form) {
+  const fd = Object.fromEntries(new FormData(form));
+  await api(`/api/templates/${form.dataset.tpl}`, { method: "PUT", body: {
+    name: fd.name, aspect: fd.aspect, min_duration: Number(fd.min_duration), max_duration: Number(fd.max_duration), layout: fd.layout,
+    hook: fd.hook, sub_scale: Number(fd.sub_scale), cta_at: fd.cta_at, instructions: fd.instructions,
+    remove_silence: !!fd.remove_silence, use: Object.keys(USE_LABELS).filter((k) => fd[`use_${k}`]),
+  } });
+  $("#templates").dataset.sig = "";
+  toast("Modelo salvo — vale para os próximos vídeos");
+  await refresh();
+}
+
+$("#brand").addEventListener("submit", act(saveBrand));
+$("#brand").addEventListener("change", act(async (e) => {
+  if (e.target.dataset.upload) await uploadAsset(e.target);
+}));
+$("#brand").addEventListener("click", act(async (e) => {
+  const del = e.target.dataset.delAsset;
+  if (del && confirm("Apagar este arquivo? Ele sai de todos os próximos renders.")) {
+    await api(`/api/assets/${del}`, { method: "DELETE" });
+    $("#brand").dataset.sig = "";
+    await refresh();
+  }
+}));
+$("#templates").addEventListener("submit", act(async (e) => {
+  e.preventDefault();
+  await saveTemplate(e.target);
+}));
+$("#templates").addEventListener("toggle", (e) => {
+  const id = Number(e.target.dataset?.tplOpen);
+  if (!id) return;
+  if (e.target.open) openTpls.add(id);
+  else openTpls.delete(id);
+}, true);
+$("#templates").addEventListener("click", act(async (e) => {
+  const t = e.target;
+  if (t.id === "new-template") {
+    const tpl = await api(`/api/channels/${encodeURIComponent(ui.channelId)}/templates`, { method: "POST", body: { name: "Novo modelo", use: ["banner", "logo"] } });
+    openTpls.add(tpl.id);
+  }
+  if (t.dataset.tplDefault) {
+    await api(`/api/channels/${encodeURIComponent(ui.channelId)}`, { method: "PUT", body: { default_template: Number(t.dataset.tplDefault) } });
+    toast("Modelo padrão alterado");
+  }
+  if (t.dataset.tplDel && confirm("Apagar este modelo? Vídeos já processados com ele passam a usar o modelo padrão.")) {
+    await api(`/api/templates/${t.dataset.tplDel}`, { method: "DELETE" });
+  }
+  if (t.id === "new-template" || t.dataset.tplDefault || t.dataset.tplDel) {
+    $("#templates").dataset.sig = "";
+    await refresh();
+  }
+}));
 
 // ---------------- Custos ----------------
 
@@ -845,10 +1102,11 @@ function render() {
   const filter = $("#channel-filter");
   filter.innerHTML = `<option value="">Todos os canais</option>${opts}`;
   filter.value = ui.channel;
-  const jobSel = $("#new-job select");
+  const jobSel = $("#new-job select[name=channel_id]");
   const prev = jobSel.value;
   jobSel.innerHTML = opts;
   jobSel.value = prev || ui.channel || state.channels[0]?.id || "";
+  fillTemplateSelect();
 
   renderWorkers();
   renderPipeline();
@@ -880,6 +1138,7 @@ $("#channel-filter").addEventListener("change", (e) => {
   localStorage.setItem("channel", ui.channel);
   render();
 });
+$("#new-job select[name=channel_id]").addEventListener("change", fillTemplateSelect);
 $("#new-job").addEventListener("submit", act(async (e) => {
   e.preventDefault();
   const fd = Object.fromEntries(new FormData(e.target));

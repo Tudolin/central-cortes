@@ -163,6 +163,21 @@ function screenPlan(speaker: Cluster, W: number, H: number, out: Out): ReframePl
   };
 }
 
+/** Saída 16:9: vídeo inteiro (fundo desfocado se a fonte não for horizontal). */
+export function landscapePlan(W: number, H: number, out: Out): ReframePlan {
+  const sameShape = Math.abs(W / H - out.w / out.h) < 0.05;
+  return {
+    ...(sameShape
+      ? { layout: "fit" as const, graph: `[0:v]scale=${out.w}:${out.h}:flags=lanczos,setsar=1[base]` }
+      : fitPlan(W, out)),
+    subAlign: 2,
+    subMarginV: 70,
+    bannerY: 170,
+    canZoom: true,
+    upscale: out.h / H,
+  };
+}
+
 /** Sem rosto confiável: vídeo inteiro centralizado sobre fundo desfocado. */
 function fitPlan(W: number, out: Out): ReframePlan {
   return {

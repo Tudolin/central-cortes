@@ -4,7 +4,9 @@ import { pipeline } from "node:stream/promises";
 import { all, get, getChannel, getClip, getJob, run, updateClip, updateJob, type Clip, type Job } from "../db.ts";
 import { bus } from "../events.ts";
 import { HttpError, must, route, serveFile } from "../http.ts";
+import type { CutProposal } from "../pipeline/analyze.ts";
 import { renderCaption } from "../pipeline/caption.ts";
+import { specFor, templateOf } from "./brandApi.ts";
 import { clipPath, transcriptPath, type ClipFile } from "./media.ts";
 import { diskState } from "./disk.ts";
 import { rebalance } from "./schedule.ts";
@@ -72,7 +74,7 @@ route("POST", "/api/worker/claim", (req) => {
   if (final) {
     finalRequested.set(final.id, Date.now());
     const job = getJob(final.job_id)!;
-    return { type: "final", clip: final, job, channel: getChannel(job.channel_id) };
+    return { type: "final", clip: final, job, channel: getChannel(job.channel_id), spec: specFor(final) };
   }
   // Disco crítico: não aceita trabalho que gera arquivos novos no hub.
   if (diskState().critical) return { type: "idle", reason: "disco do hub cheio" };
@@ -80,18 +82,18 @@ route("POST", "/api/worker/claim", (req) => {
   if (clip) {
     updateClip(clip.id, { status: "RENDERING", worker, error: "", detail: "" });
     const job = getJob(clip.job_id)!;
-    return { type: "clip", clip: getClip(clip.id), job, channel: getChannel(job.channel_id) };
+    return { type: "clip", clip: getClip(clip.id), job, channel: getChannel(job.channel_id), spec: specFor(clip) };
   }
   const job = get<Job>("SELECT * FROM jobs WHERE status = 'QUEUED' ORDER BY id LIMIT 1");
   if (job) {
     updateJob(job.id, { status: "DOWNLOADING", worker, error: "", detail: "" });
     const hasClips = !!get("SELECT 1 FROM clips WHERE job_id = ?", job.id);
-    return { type: "job", job: getJob(job.id), channel: getChannel(job.channel_id), hasClips };
+    return { type: "job", job: getJob(job.id), channel: getChannel(job.channel_id), hasClips, template: templateOf(job.template_id, job.channel_id).tpl ?? null };
   }
   return { type: "idle" };
 }, "worker");
 
-const JOB_FIELDS = ["status", "detail", "error", "video_url", "video_id", "title", "duration", "model", "tokens_in", "tokens_out", "tokens_cache_read", "tokens_cache_write", "cost_usd"] as const;
+const JOB_FIELDS = ["status", "detail", "error", "video_url", "video_id", "title", "uploader", "duration", "model", "tokens_in", "tokens_out", "tokens_cache_read", "tokens_cache_write", "cost_usd"] as const;
 
 route("POST", "/api/worker/jobs/:id", (req, _r, [id], body: Record<string, string | number>) => {
   const job = must(getJob(+id), "Job");
@@ -122,17 +124,20 @@ route("GET", "/api/worker/jobs/:id/transcript", (req, res, [id]) => {
 }, "worker");
 
 route("POST", "/api/worker/jobs/:id/clips", (_q, _r, [id], body: {
-  cuts: { start_s: number; end_s: number; score: number; hook: string; title: string; layout: string; zoom: boolean; keywords: string[] }[];
+  cuts: CutProposal[];
 }) => {
   const job = must(getJob(+id), "Job");
   const ch = getChannel(job.channel_id)!;
+  const aspect = templateOf(job.template_id, ch.id).tpl?.aspect ?? "9:16";
   if (get("SELECT 1 FROM clips WHERE job_id = ?", job.id)) throw new HttpError(409, "Job já tem cortes");
   body.cuts.forEach((c, i) =>
     run(
-      `INSERT INTO clips (job_id, idx, start_s, end_s, score, hook, title, caption, keywords, layout, zoom) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO clips (job_id, idx, start_s, end_s, score, hook, title, caption, keywords, layout, zoom, aspect, teaser_start, teaser_end, speaker_name, speaker_role)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       job.id, i + 1, c.start_s, c.end_s, c.score, c.hook, c.title,
       renderCaption(ch.caption_template, job, c.title, c.start_s),
-      JSON.stringify(c.keywords), c.layout, c.zoom ? 1 : 0,
+      JSON.stringify(c.keywords), c.layout, c.zoom ? 1 : 0, aspect,
+      c.teaser_start ?? 0, c.teaser_end ?? 0, c.speaker_name ?? "", c.speaker_role ?? "",
     ),
   );
   updateJob(job.id, body.cuts.length ? { status: "RENDERING", detail: "" } : { status: "DONE", detail: "IA não encontrou trechos com potencial" });

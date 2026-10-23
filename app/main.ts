@@ -5,6 +5,7 @@ if (config.role === "hub" || config.role === "all") {
   await import("./db.ts");
   const { startServer } = await import("./http.ts");
   await import("./hub/api.ts");
+  await import("./hub/brandApi.ts");
   const { startReaper } = await import("./hub/workerApi.ts");
   const { startScheduler } = await import("./hub/schedule.ts");
   const { startTelegram } = await import("./hub/telegram.ts");
