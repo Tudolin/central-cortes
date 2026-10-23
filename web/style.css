@@ -310,3 +310,44 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 #templates > .btn { margin-top: 4px; }
 
 .asset a.btn { color: var(--text); text-decoration: none; }
+
+/* ---------- Prévia ao vivo ---------- */
+.pv-side { margin-top: 16px; position: sticky; top: 76px; }
+.pv-ctl { display: grid; gap: 6px; margin-bottom: 8px; }
+.pv-ctl label { display: grid; gap: 3px; font-size: 11px; color: var(--muted); }
+.pv-note { font-size: 11px; margin-top: 6px; line-height: 1.35; }
+.pv-stage { position: relative; width: 100%; overflow: hidden; border-radius: 6px; background: #000; }
+.pv-frame { position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden; background: linear-gradient(160deg, #2a2a30, #0d0d10); }
+.pv-frame video { pointer-events: none; }
+.pv-phase { position: absolute; inset: 0; }
+.pv-phase > video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.pv-bg, .pv-abs, .pv-banner, .pv-lt, .pv-credit, .pv-sub { position: absolute; }
+.pv-ph { position: absolute; inset: 0; display: grid; place-items: center; color: #555; font-size: 60px; text-align: center; padding: 120px; }
+.pv-banner-box { position: absolute; inset: 0; box-shadow: 0 8px 0 rgba(0,0,0,.5); }
+.pv-banner, .pv-banner-box { transform-origin: 50% 50%; }
+.pv-banner { transform: rotate(-2deg); }
+.pv-banner-text { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; font-family: Impact, "Anton", sans-serif; text-transform: uppercase; paint-order: stroke fill; }
+.pv-sub { text-align: center; font-weight: 900; text-transform: uppercase; line-height: 1.15; paint-order: stroke fill; text-shadow: 3px 3px 0 rgba(0,0,0,.6); }
+.pv-lt { display: grid; justify-items: start; font-weight: 800; font-family: "Arial Black", sans-serif; }
+.pv-credit { color: #fff; background: rgba(0,0,0,.62); font-family: Arial, sans-serif; }
+.pv-zones i { position: absolute; background: repeating-linear-gradient(45deg, rgba(255,60,60,.28) 0 18px, rgba(255,60,60,.12) 18px 36px); }
+.pv-zones span { position: absolute; left: 0; right: 0; text-align: center; color: rgba(255,255,255,.8); font: 700 34px Arial, sans-serif; transform: translateY(50%); }
+.pv-nozones .pv-zones { display: none; }
+.pv-bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.pv-bar input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.pv-bar .mono { font-size: 10px; white-space: nowrap; }
+.pv-track { position: relative; height: 10px; background: var(--panel-2); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.pv-track .seg { position: absolute; top: 0; bottom: 0; }
+.pv-track .seg.intro, .pv-track .seg.outro { background: #4da3ff; }
+.pv-track .seg.main { background: #2a2a2e; }
+.pv-track .mark { position: absolute; height: 4px; }
+.pv-track .mark.banner { top: 0; background: var(--red); }
+.pv-track .mark.cta { bottom: 0; background: var(--green); }
+.pv-track .mark.lt { top: 3px; background: var(--accent); height: 3px; }
+.pv-opt { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); margin-top: 6px; }
+.montage-grid { display: grid; grid-template-columns: 220px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 900px) {
+  .pv-side { position: static; max-width: 280px; margin: 16px auto 0; }
+  .montage-grid { grid-template-columns: minmax(0, 1fr); }
+  #pv-clip { max-width: 240px; margin: 0 auto; }
+}

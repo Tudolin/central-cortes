@@ -113,7 +113,8 @@ export function startServer() {
         }
         const file = normalize(join(config.webDir, path === "/" ? "index.html" : path));
         if (file.startsWith(config.webDir) && existsSync(file) && statSync(file).isFile()) {
-          res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+          // no-cache: o navegador revalida a cada carga, então um deploy novo do painel aparece na hora.
+          res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", "cache-control": "no-cache" });
           return createReadStream(file).pipe(res);
         }
       }

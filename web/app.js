@@ -1,4 +1,5 @@
 // Dashboard da Central de Cortes — JS puro, sem build. Estado vem de /api/state e é atualizado via SSE.
+import { previewConfig, updatePreview } from "./preview.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -20,6 +21,8 @@ const ui = {
   channel: localStorage.getItem("channel") || "",
   studioFilter: "PENDING_REVIEW",
   clipId: null,
+  pvTpl: null, // modelo mostrado na prévia do canal
+  pvLayout: "auto",
   kcol: localStorage.getItem("kcol") || "",
   channelId: null,
 };
@@ -431,6 +434,7 @@ function renderStudioMain() {
       </div>
     </div>`;
   drawTrim();
+  refreshClipPreview();
   tt = null;
   if ($("#tt-panel")) loadTikTokPanel(fresh.id);
 }
@@ -778,6 +782,7 @@ function renderChannels() {
   if (ch.id) {
     renderBrand();
     renderTemplates();
+    schedulePreview();
   }
   if (form.dataset.for === ch.id && form.contains(document.activeElement)) return; // não sobrescreve enquanto edita
   form.dataset.for = ch.id;
@@ -853,8 +858,9 @@ function montageBlock(c) {
   const silence = ov.remove_silence ?? !!t?.remove_silence;
   const teaserOk = c.teaser_end > c.teaser_start;
   const teaser = (ov.teaser ?? t?.hook === "teaser") && teaserOk;
-  return `<details class="card montage" ${Object.keys(ov).length ? "open" : ""}>
+  return `<details class="card montage" open>
     <summary><b>Montagem deste corte</b> <span class="muted">modelo ${esc(t?.name ?? "—")} · ${esc(c.aspect || "9:16")} · mude só o que for diferente aqui</span></summary>
+    <div class="montage-grid"><div><div id="pv-clip"></div><div class="muted pv-note">Prévia ao vivo: legenda de exemplo; o vídeo final usa as falas reais.</div></div><div>
     <div class="checks wrap">
       ${Object.entries(USE_LABELS).map(([k, l]) => `<label><input type="checkbox" data-use="${k}" ${on(k) ? "checked" : ""}> ${l}</label>`).join("")}
       <label><input type="checkbox" id="o-silence" ${silence ? "checked" : ""}> Remover silêncios</label>
@@ -866,6 +872,7 @@ function montageBlock(c) {
       <label>Nome no lower third <input id="o-name" value="${esc(c.speaker_name || "")}" placeholder="vazio = sem lower third"></label>
       <label class="full">Cargo / função <input id="o-role" value="${esc(c.speaker_role || "")}"></label>
     </div>
+    </div></div>
   </details>`;
 }
 
@@ -936,11 +943,10 @@ function renderBrand() {
   </form>`;
 }
 
-async function saveBrand(e) {
-  e.preventDefault();
-  const fd = Object.fromEntries(new FormData(e.target));
+function brandFromForm(form) {
+  const fd = Object.fromEntries(new FormData(form));
   const id = (k) => (fd[`a_${k}`] ? Number(fd[`a_${k}`]) : null);
-  await api(`/api/channels/${encodeURIComponent(ui.channelId)}/brand`, { method: "PUT", body: {
+  return {
     intro: id("intro"), outro: id("outro"),
     cta: { asset: id("cta"), at: fd.cta_at, position: fd.cta_position, scale: Number(fd.cta_scale), key: fd.cta_key },
     logo: { asset: id("logo"), position: fd.logo_position, opacity: Number(fd.logo_opacity), scale: Number(fd.logo_scale) },
@@ -948,7 +954,12 @@ async function saveBrand(e) {
     subtitle: { font: fd.sub_font, size: Number(fd.sub_size), color: fd.sub_color },
     lower_third: { color: fd.lt_color, text_color: fd.lt_text, duration: Number(fd.lt_duration) },
     safe_zones: ["tiktok", "youtube", "reels"].filter((z) => fd[`zone_${z}`]),
-  } });
+  };
+}
+
+async function saveBrand(e) {
+  e.preventDefault();
+  await api(`/api/channels/${encodeURIComponent(ui.channelId)}/brand`, { method: "PUT", body: brandFromForm(e.target) });
   $("#brand").dataset.sig = "";
   toast("Identidade salva — vale para os próximos renders");
   await refresh();
@@ -1006,17 +1017,124 @@ function renderTemplates() {
     <button class="btn" type="button" id="new-template">+ Novo modelo</button>`;
 }
 
-async function saveTemplate(form) {
+function tplFromForm(form) {
   const fd = Object.fromEntries(new FormData(form));
-  await api(`/api/templates/${form.dataset.tpl}`, { method: "PUT", body: {
+  return {
     name: fd.name, aspect: fd.aspect, min_duration: Number(fd.min_duration), max_duration: Number(fd.max_duration), layout: fd.layout,
     hook: fd.hook, sub_scale: Number(fd.sub_scale), cta_at: fd.cta_at, instructions: fd.instructions,
     remove_silence: !!fd.remove_silence, use: Object.keys(USE_LABELS).filter((k) => fd[`use_${k}`]),
-  } });
+  };
+}
+
+async function saveTemplate(form) {
+  await api(`/api/templates/${form.dataset.tpl}`, { method: "PUT", body: tplFromForm(form) });
   $("#templates").dataset.sig = "";
   toast("Modelo salvo — vale para os próximos vídeos");
   await refresh();
 }
+
+// ---------- Prévia ao vivo ----------
+
+/** Vídeo de exemplo: proxy de um corte recente do canal (pendentes primeiro, que ainda têm proxy no hub). */
+function sampleBg(channelId) {
+  const withProxy = state.clips.filter((c) => c.channel_id === channelId && c.proxy_end > c.proxy_start);
+  const c = withProxy.find((x) => x.status === "PENDING_REVIEW") ?? withProxy[0];
+  return c ? { url: `/media/clip/${c.id}.proxy.mp4`, start: c.start_s - c.proxy_start + 5 } : null;
+}
+
+let pvQueued = false;
+function schedulePreview() {
+  if (pvQueued) return;
+  pvQueued = true;
+  setTimeout(() => {
+    pvQueued = false;
+    if (ui.tab === "channels") refreshChannelPreview();
+    if (ui.tab === "studio") refreshClipPreview();
+  }, 30);
+}
+
+/** Prévia da tela do canal: usa os valores dos formulários como estão (antes de salvar). */
+function refreshChannelPreview() {
+  const wrap = $("#pv-channel-wrap");
+  const ch = state.channels.find((c) => c.id === ui.channelId);
+  if (!ch) return (wrap.innerHTML = "");
+  const tpls = state.templates.filter((t) => t.channel_id === ch.id);
+  if (!tpls.some((t) => t.id === ui.pvTpl)) ui.pvTpl = ch.default_template || tpls[0]?.id;
+  if (wrap.dataset.ch !== ch.id || wrap.dataset.tpls !== tpls.map((t) => t.id + t.name).join()) {
+    wrap.dataset.ch = ch.id;
+    wrap.dataset.tpls = tpls.map((t) => t.id + t.name).join();
+    wrap.innerHTML = `<h3 class="integ-title">Prévia ao vivo</h3>
+      <div class="pv-ctl"><label>Modelo <select data-pv-tpl>${tpls.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></label>
+      <label>Layout <select data-pv-layout>${opt(LAYOUTS, ui.pvLayout)}</select></label></div>
+      <div id="pv-channel"></div>
+      <div class="muted pv-note">Mostra as mudanças antes de salvar. Legenda e nomes são de exemplo.</div>`;
+  }
+  $("[data-pv-tpl]", wrap).value = String(ui.pvTpl);
+  const tplForm = $(`.tpl-form[data-tpl="${ui.pvTpl}"]`);
+  const tpl = tplForm ? tplFromForm(tplForm) : (() => {
+    const t = state.templates.find((x) => x.id === ui.pvTpl);
+    return t && { ...t, use: [...useOf(t)] };
+  })();
+  const chForm = $("#channel-form");
+  const live = chForm?.dataset.for === ch.id ? Object.fromEntries(new FormData(chForm)) : {};
+  updatePreview($("#pv-channel"), previewConfig({
+    ch: { ...ch, ...live },
+    brand: $("#brand-form") && $("#brand").dataset.for === ch.id ? brandFromForm($("#brand-form")) : brandOf(ch),
+    tpl,
+    use: new Set(tpl?.use ?? ["banner"]),
+    layout: ui.pvLayout !== "auto" ? ui.pvLayout : tpl?.layout,
+    title: "Ninguém esperava essa resposta no meio do debate",
+    speaker: { name: "Nome do Convidado", role: "Cargo ou função" },
+    credit: "Fonte: canal original",
+    assets: state.assets.filter((a) => a.channel_id === ch.id),
+    bg: sampleBg(ch.id),
+    main: 20,
+  }));
+}
+
+/** Prévia do corte aberto no Estúdio, com as sobrescritas ainda não salvas. */
+function refreshClipPreview() {
+  const el = $("#pv-clip");
+  if (!el || !studioCtx) return;
+  const c = studioCtx.clip;
+  const ch = state.channels.find((x) => x.id === c.channel_id);
+  if (!ch) return;
+  const t = tplOf(c);
+  const job = state.jobs.find((j) => j.id === c.job_id);
+  updatePreview(el, previewConfig({
+    ch,
+    brand: brandOf(ch),
+    tpl: { ...t, aspect: c.aspect || t?.aspect },
+    use: useOf(t),
+    overrides: collectOverrides(c),
+    layout: $("#f-layout")?.value || c.layout,
+    title: $("#f-title")?.value || c.title,
+    speaker: { name: $("#o-name")?.value.trim() ?? "", role: $("#o-role")?.value.trim() ?? "" },
+    credit: job?.video_url ? `Fonte: ${job.uploader || job.title}` : c.video_title ? `Fonte: ${c.video_title}` : null,
+    assets: state.assets.filter((a) => a.channel_id === ch.id),
+    bg: studioCtx.hasProxy ? { url: `/media/clip/${c.id}.proxy.mp4?v=${encodeURIComponent(c.rendered_at || "")}`, start: studioCtx.start - studioCtx.proxyStart } : null,
+    main: Math.max(3, studioCtx.end - studioCtx.start),
+  }));
+}
+
+for (const sel of ["#brand", "#templates", "#channel-form"]) {
+  $(sel).addEventListener("input", schedulePreview);
+  $(sel).addEventListener("change", schedulePreview);
+}
+$("#templates").addEventListener("focusin", (e) => {
+  const f = e.target.closest(".tpl-form");
+  if (f && Number(f.dataset.tpl) !== ui.pvTpl) {
+    ui.pvTpl = Number(f.dataset.tpl);
+    schedulePreview();
+  }
+});
+$("#pv-channel-wrap").addEventListener("change", (e) => {
+  if (e.target.matches("[data-pv-tpl]")) ui.pvTpl = Number(e.target.value);
+  if (e.target.matches("[data-pv-layout]")) ui.pvLayout = e.target.value;
+  schedulePreview();
+});
+$("#studio-main").addEventListener("input", schedulePreview);
+$("#studio-main").addEventListener("change", schedulePreview);
 
 $("#brand").addEventListener("submit", act(saveBrand));
 $("#brand").addEventListener("change", act(async (e) => {
