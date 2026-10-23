@@ -113,16 +113,31 @@ export const tg = {
   },
 
   /** Decisão tomada (em qualquer lugar): atualiza a mensagem original e tira os botões. */
+  /**
+   * Decisão tomada (em qualquer lugar): o card sai do chat, para que só fique o que ainda espera revisão.
+   * O Telegram só deixa o bot apagar mensagens com menos de 48 h; nas mais antigas, tira os botões e marca a decisão.
+   */
   async clipDecided(c: Clip, kind: "approved" | "rejected") {
     if (!enabled() || !c.tg_message_id) return;
-    const footer = kind === "approved" ? `✅ <b>Aprovado</b> — agendado para ${fmtWhen(c.scheduled_at)}` : "❌ <b>Rejeitado</b>";
-    await call("editMessageCaption", {
-      chat_id: settings.telegram.chatId,
-      message_id: c.tg_message_id,
-      caption: reviewCaption(c, footer),
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: [] },
-    }).catch(() => {});
+    const deleted = await call("deleteMessage", { chat_id: settings.telegram.chatId, message_id: c.tg_message_id }).then(() => true, () => false);
+    if (!deleted) {
+      const footer = kind === "approved" ? `✅ <b>Aprovado</b> — agendado para ${fmtWhen(c.scheduled_at)}` : "❌ <b>Rejeitado</b>";
+      await call("editMessageCaption", {
+        chat_id: settings.telegram.chatId,
+        message_id: c.tg_message_id,
+        caption: reviewCaption(c, footer),
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [] },
+      }).catch(() => {});
+    }
+    updateClip(c.id, { tg_message_id: 0 });
+  },
+
+  /** Limpa do chat os cards de cortes que já foram decididos (inclusive os de antes desta versão). */
+  async tidyDecided() {
+    if (!enabled()) return;
+    const decided = all<Clip>("SELECT * FROM clips WHERE tg_message_id != 0 AND status NOT IN ('PENDING_REVIEW', 'RENDER_QUEUED', 'RENDERING')");
+    for (const c of decided) await tg.clipDecided(c, c.status === "REJECTED" ? "rejected" : "approved");
   },
 
   async published(c: Clip, posts: Post[]) {
@@ -345,6 +360,7 @@ export async function startTelegram() {
       offset = 0;
       chatCandidates.clear();
       console.log("[telegram] bot ativo (long polling)");
+      void tg.tidyDecided().catch((e) => console.error(`[telegram] limpeza: ${(e as Error).message}`));
     }
     try {
       await tg.catchUp();

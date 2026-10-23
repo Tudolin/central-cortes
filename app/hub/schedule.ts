@@ -170,15 +170,34 @@ async function fireWebhook(ch: Channel, clipId: number) {
   }
 }
 
+const warnedMissing = new Set<number>();
+/** Avisa uma vez quando um corte passou do horário há 30 min esperando o vídeo final (PC desligado?). */
+function warnMissingFinal(c: Clip) {
+  if (c.detail !== "aguardando vídeo final do PC") updateClip(c.id, { detail: "aguardando vídeo final do PC" });
+  const late = Date.now() - Date.parse(c.scheduled_at ?? "") > 30 * 60_000;
+  if (late && !warnedMissing.has(c.id)) {
+    warnedMissing.add(c.id);
+    void tg.alert(`⏳ "${c.title}" passou do horário esperando o vídeo final. Ligue o PC com o worker rodando: ele envia e o corte é publicado na hora.`);
+  }
+}
+
 let busy = false;
 export async function tick() {
   if (busy) return;
   busy = true;
   try {
     // Um por vez: respeita rate limits das plataformas e o upload lento do notebook.
+    const waiting = new Set<number>();
     for (;;) {
-      const due = get<Clip>("SELECT * FROM clips WHERE status = 'SCHEDULED' AND scheduled_at <= ? ORDER BY scheduled_at LIMIT 1", new Date().toISOString());
+      const due = all<Clip>("SELECT * FROM clips WHERE status = 'SCHEDULED' AND scheduled_at <= ? ORDER BY scheduled_at", new Date().toISOString())
+        .find((c) => !waiting.has(c.id));
       if (!due) break;
+      // Vídeo final ainda no PC: espera o worker enviar (não conta como tentativa de publicação).
+      if (!existsSync(clipPath(due.job_id, due.id, "mp4"))) {
+        waiting.add(due.id);
+        warnMissingFinal(due);
+        continue;
+      }
       await publishClip(due);
     }
   } catch (e) {

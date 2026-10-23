@@ -45,9 +45,35 @@ route("POST", "/api/worker/heartbeat", (req, _r, _p, body: { task?: string }) =>
 }, "worker");
 
 /** Re-render primeiro (alguém está esperando no Estúdio), depois vídeos novos. */
+/**
+ * Vídeo final sob demanda: o PC guarda o mp4 de cada corte; o hub só recebe os que serão publicados
+ * nas próximas FINAL_WINDOW_H horas (o disco do notebook não comporta a agenda inteira).
+ */
+export const FINAL_WINDOW_H = 36;
+const finalRequested = new Map<number, number>(); // clipId → quando foi pedido (evita pedir em dobro)
+
+export const hasFinal = (c: Clip) => existsSync(clipPath(c.job_id, c.id, "mp4"));
+
+function nextFinalNeeded(): Clip | undefined {
+  const until = new Date(Date.now() + FINAL_WINDOW_H * 3600_000).toISOString();
+  const due = all<Clip>(
+    `SELECT * FROM clips WHERE status IN ('SCHEDULED','PUBLISHING','PUBLISH_FAILED') AND (scheduled_at IS NULL OR scheduled_at <= ?)
+     ORDER BY scheduled_at`,
+    until,
+  );
+  return due.find((c) => !hasFinal(c) && Date.now() - (finalRequested.get(c.id) ?? 0) > 15 * 60_000);
+}
+
 route("POST", "/api/worker/claim", (req) => {
   const worker = workerOf(req);
   heartbeat(worker);
+  // Primeiro: vídeos finais de cortes que saem em breve (sem eles a publicação espera).
+  const final = nextFinalNeeded();
+  if (final) {
+    finalRequested.set(final.id, Date.now());
+    const job = getJob(final.job_id)!;
+    return { type: "final", clip: final, job, channel: getChannel(job.channel_id) };
+  }
   // Disco crítico: não aceita trabalho que gera arquivos novos no hub.
   if (diskState().critical) return { type: "idle", reason: "disco do hub cheio" };
   const clip = get<Clip>("SELECT * FROM clips WHERE status = 'RENDER_QUEUED' ORDER BY id LIMIT 1");
@@ -137,7 +163,8 @@ route("PUT", "/api/worker/clips/:id/files/:kind", async (req, _r, [id, kind]) =>
 
 route("POST", "/api/worker/clips/:id/done", (_q, _r, [id], body: { layout_used: string; proxy_start: number; proxy_end: number }) => {
   const clip = must(getClip(+id), "Corte");
-  if (!existsSync(clipPath(clip.job_id, clip.id, "mp4"))) throw new HttpError(409, "mp4 não recebido");
+  // O mp4 final fica no PC; para revisão basta a prévia (Telegram e Estúdio).
+  if (!existsSync(clipPath(clip.job_id, clip.id, "preview")) && !hasFinal(clip)) throw new HttpError(409, "prévia não recebida");
   // Já aprovado (re-render de qualidade): volta direto para a agenda, sem pedir revisão de novo.
   const approved = !!clip.approved_at;
   updateClip(clip.id, {
@@ -148,6 +175,18 @@ route("POST", "/api/worker/clips/:id/done", (_q, _r, [id], body: { layout_used: 
   else void tg.reviewReady(clip.id);
   finishJobIfRendered(clip.job_id);
   return { ok: true };
+}, "worker");
+
+/** Worker terminou (ou falhou) de enviar o vídeo final pedido. */
+route("POST", "/api/worker/clips/:id/final", (_q, _r, [id], body: { error?: string }) => {
+  const clip = must(getClip(+id), "Corte");
+  finalRequested.delete(clip.id);
+  if (body?.error) {
+    console.error(`[final] corte #${clip.id}: ${body.error}`);
+    finalRequested.set(clip.id, Date.now()); // espera 15 min antes de pedir de novo
+  }
+  bus.emit("change", { table: "clips", id: clip.id });
+  return { ok: true, hasFinal: hasFinal(clip) };
 }, "worker");
 
 export function finishJobIfRendered(jobId: number) {

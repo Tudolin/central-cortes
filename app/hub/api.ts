@@ -15,6 +15,7 @@ import { approve, needsTikTokChoices, rebalance, reject } from "./schedule.ts";
 import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
 import { chatCandidates, telegramBotInfo, telegramTest, tg } from "./telegram.ts";
 import { diskState } from "./disk.ts";
+import { robotScreenUrl } from "./publish/tiktokWeb.ts";
 
 const publicChannel = (c: Channel) => {
   const creds = credentialsOf(c);
@@ -52,6 +53,7 @@ route("GET", "/api/state", () => {
     telegram: !!(settings.telegram.token && settings.telegram.chatId),
     publicUrl: settings.publicUrl,
     timezone: config.timezone,
+    robotScreen: robotScreenUrl(),
   };
   return { channels, jobs, clips, posts, costs, daily, workers, integrations, disk: diskState() };
 });
@@ -356,7 +358,10 @@ route("GET", "/media/clip/:file", (req, res, [file]) => {
   const download = new URL(req.url!, "http://x").searchParams.has("download")
     ? `${clip.title.replace(/[^\p{L}\p{N} ]/gu, "").slice(0, 60).trim() || "corte"}.mp4`
     : undefined;
-  serveFile(req, res, clipPath(clip.job_id, clip.id, kind), download);
+  // O vídeo final pode estar só no PC (fora da janela de publicação): mostra a prévia 720p no lugar.
+  const path = clipPath(clip.job_id, clip.id, kind);
+  const fallback = clipPath(clip.job_id, clip.id, "preview");
+  serveFile(req, res, kind === "mp4" && !existsSync(path) && existsSync(fallback) ? fallback : path, download);
 });
 
 // ---------- Site público (exigido pelo TikTok: página do app, termos e privacidade) ----------

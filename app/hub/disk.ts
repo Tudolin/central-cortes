@@ -4,6 +4,7 @@ import { all, type Clip } from "../db.ts";
 import { bus } from "../events.ts";
 import { removeClipFiles } from "./media.ts";
 import { tg } from "./telegram.ts";
+import { FINAL_WINDOW_H } from "./workerApi.ts";
 
 /**
  * Proteção de disco do hub (o notebook tem pouco espaço e o SQLite derruba o hub quando o disco enche).
@@ -37,9 +38,11 @@ function prune() {
       removeClipFiles(c.job_id, c.id, ["mp4", "proxy", "preview"]);
       continue;
     }
-    // Proxy só serve para o ajuste fino durante a revisão; prévia só serve para o Telegram.
+    // Proxy só serve para o ajuste fino durante a revisão.
     if (!["PENDING_REVIEW", "RENDER_QUEUED", "RENDERING"].includes(c.status)) removeClipFiles(c.job_id, c.id, ["proxy"]);
-    if (c.tg_message_id) removeClipFiles(c.job_id, c.id, ["preview"]);
+    // Vídeo final: só fica no hub perto da hora de publicar (o PC guarda o original e reenvia quando preciso).
+    const far = c.scheduled_at && Date.parse(c.scheduled_at) > Date.now() + (FINAL_WINDOW_H + 12) * 3600_000 && !c.schedule_locked;
+    if (["PENDING_REVIEW", "FAILED"].includes(c.status) || (c.status === "SCHEDULED" && far)) removeClipFiles(c.job_id, c.id, ["mp4"]);
   }
 }
 

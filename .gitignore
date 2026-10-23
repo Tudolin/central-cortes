@@ -5,3 +5,4 @@ models/*.bin
 output/
 __pycache__/
 *.pyc
+browser/

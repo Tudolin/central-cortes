@@ -13,5 +13,33 @@ services:
       # Local (Tailscale Serve faz o https) + IP do Tailscale (o worker do PC chega por aqui).
       - "127.0.0.1:8095:8095"
       - "${TAILSCALE_IP:-127.0.0.1}:8095:8095"
+      # Tela remota do navegador do robô (KasmVNC do cortes-browser, que usa a rede deste container).
+      - "127.0.0.1:3011:3000"
     volumes:
       - ./data:/app/data
+
+  # Navegador do robô de postagem no TikTok (modo "Navegador"): Chromium com tela remota.
+  # Divide a rede com o hub, então o hub controla o Chromium por 127.0.0.1:9222 (CDP).
+  # O login do TikTok fica no perfil persistente em ./browser.
+  cortes-browser:
+    image: lscr.io/linuxserver/chromium:latest
+    container_name: cortes-browser
+    restart: unless-stopped
+    network_mode: "service:cortes-hub"
+    depends_on: [cortes-hub]
+    shm_size: "1gb"
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: America/Sao_Paulo
+      CUSTOM_USER: admin
+      PASSWORD: ${DASHBOARD_PASSWORD}
+      TITLE: Robo TikTok - Central de Cortes
+      # Perfil próprio: o Chrome ignora --remote-debugging-port no diretório de perfil padrão.
+      CHROME_CLI: --remote-debugging-port=9222 --user-data-dir=/config/robo-tiktok --no-first-run https://www.tiktok.com/tiktokstudio/upload
+    volumes:
+      - ./browser:/config
+      # Mesmo caminho do hub: o upload usa o arquivo do corte direto do disco.
+      - ./data/media:/app/data/media:ro

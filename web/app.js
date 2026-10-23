@@ -582,7 +582,7 @@ const CH_FIELDS = [
   ["publish_targets", "Publicar em", { targets: true, full: true }],
   ["youtube_privacy", "YouTube: visibilidade", { select: ["public", "unlisted", "private"] }],
   ["youtube_category", "YouTube: categoria", { select: [["25", "Notícias e política"], ["22", "Pessoas e blogs"], ["24", "Entretenimento"], ["27", "Educação"]] }],
-  ["tiktok_mode", "TikTok: modo", { select: [["inbox", "Rascunho na caixa de entrada (sem auditoria)"], ["direct", "Publicação direta — visibilidade e interações escolhidas a cada aprovação (app auditado; reconecte a conta após trocar)"]] }],
+  ["tiktok_mode", "TikTok: modo", { select: [["inbox", "Rascunho na caixa de entrada (sem auditoria)"], ["direct", "Publicação direta — visibilidade e interações escolhidas a cada aprovação (app auditado; reconecte a conta após trocar)"], ["browser", "Navegador (robô no TikTok Studio — publica direto, sem app aprovado)"]] }],
   ["webhook_url", "Webhook após publicar (opcional)", { full: true }],
 ];
 
@@ -686,6 +686,9 @@ function renderIntegrations() {
       <div class="integ-head"><b>${PLATFORM[p]}</b>
         ${ch ? (acct ? `<span class="ok-dot">${esc(ch.name)}: ${esc(acct)}</span>` : `<span class="muted">${esc(ch.name)}: não conectado</span>`) : ""}</div>
       <div class="muted help">${help}</div>
+      ${p === "tiktok" && ch?.tiktok_mode === "browser"
+        ? `<div class="conn"><span>🤖 Modo navegador: o robô publica pelo TikTok Studio com a conta logada na <a href="${esc(state.integrations.robotScreen)}" target="_blank" rel="noopener">tela remota do robô</a> (faça login lá uma vez).</span></div>`
+        : ""}
       ${guide(p, GUIDES[p](redirects?.[p]))}
       ${settingField(keys[0], p === "youtube" ? "Client ID" : "Client key")}
       ${settingField(keys[1], "Client secret", { secret: true })}

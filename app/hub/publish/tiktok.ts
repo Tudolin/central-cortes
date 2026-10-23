@@ -1,3 +1,4 @@
+import { tiktokWebUpload } from "./tiktokWeb.ts";
 import { open, stat } from "node:fs/promises";
 import { settings } from "../settings.ts";
 import { credentialsOf, getChannel, setCredentials, type Channel, type Clip } from "../../db.ts";
@@ -174,6 +175,8 @@ async function waitPublished(token: string, publishId: string, username: string)
 }
 
 export async function tiktokUpload(ch: Channel, clip: Clip, file: string) {
+  // Modo "Navegador": robô no TikTok Studio web (não usa a API nem o token).
+  if (getChannel(ch.id)!.tiktok_mode === "browser") return tiktokWebUpload(ch, clip, file);
   const token = await accessToken(ch);
   const fresh = getChannel(ch.id)!;
   const size = (await stat(file)).size;

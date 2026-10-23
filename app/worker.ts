@@ -15,7 +15,8 @@ import { loadTranscript, transcribe } from "./pipeline/transcribe.ts";
 type Task =
   | { type: "idle" }
   | { type: "job"; job: Job; channel: Channel; hasClips: boolean }
-  | { type: "clip"; clip: Clip; job: Job; channel: Channel };
+  | { type: "clip"; clip: Clip; job: Job; channel: Channel }
+  | { type: "final"; clip: Clip; job: Job; channel: Channel };
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 2000);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -83,13 +84,35 @@ async function processClip({ clip, job, channel }: Extract<Task, { type: "clip" 
     await report({ detail: "gerando proxy" });
     const proxy = await makeProxy(clip, dir, src.path, src.duration);
     await report({ detail: "enviando ao hub" });
-    for (const kind of ["mp4", "jpg", "proxy", "preview"] as const) {
+    // O mp4 final fica aqui no PC; o hub pede quando o corte estiver perto de ser publicado.
+    for (const kind of ["jpg", "proxy", "preview"] as const) {
       await hub("PUT", `/api/worker/clips/${clip.id}/files/${kind}`, undefined, clipFile(dir, clip.id, kind));
     }
     await hub("POST", `/api/worker/clips/${clip.id}/done`, { layout_used: layout, ...proxy });
   } catch (e) {
     await report({ status: "FAILED", error: errMsg(e) }).catch(() => {});
     console.error(`[worker] corte #${clip.id}: ${errMsg(e)}`);
+  }
+}
+
+/** Envia ao hub o vídeo final de um corte que vai ser publicado em breve (renderiza de novo se sumiu daqui). */
+async function processFinal({ clip, job, channel }: Extract<Task, { type: "final" }>) {
+  const dir = jobDir(job.id);
+  const file = clipFile(dir, clip.id, "mp4");
+  try {
+    if (!existsSync(file)) {
+      currentTask = `re-renderizando corte #${clip.id} para publicação`;
+      const src = await fetchSource(job.id, job.source, () => {});
+      if (!existsSync(join(dir, "transcript.json"))) {
+        writeFileSync(join(dir, "transcript.json"), await hub<string>("GET", `/api/worker/jobs/${job.id}/transcript`));
+      }
+      await renderClip(clip, channel, dir, src.path, loadTranscript(dir), () => {});
+    }
+    await hub("PUT", `/api/worker/clips/${clip.id}/files/mp4`, undefined, file);
+    await hub("POST", `/api/worker/clips/${clip.id}/final`, {});
+  } catch (e) {
+    await hub("POST", `/api/worker/clips/${clip.id}/final`, { error: errMsg(e) }).catch(() => {});
+    console.error(`[worker] vídeo final do corte #${clip.id}: ${errMsg(e)}`);
   }
 }
 
@@ -124,9 +147,10 @@ export async function startWorker() {
       await sleep(10_000);
       continue;
     }
-    currentTask = task.type === "job" ? `job #${task.job.id}` : `corte #${task.clip.id}`;
+    currentTask = task.type === "job" ? `job #${task.job.id}` : task.type === "final" ? `enviando vídeo final do corte #${task.clip.id}` : `corte #${task.clip.id}`;
     console.log(`[worker] ${currentTask}`);
     if (task.type === "job") await processJob(task);
+    else if (task.type === "final") await processFinal(task);
     else await processClip(task);
     currentTask = "";
   }

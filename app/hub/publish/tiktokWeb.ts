@@ -1,0 +1,100 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { chromium, type Page } from "playwright-core";
+import { config } from "../../config.ts";
+import type { Channel, Clip } from "../../db.ts";
+import { settings } from "../settings.ts";
+import { tg } from "../telegram.ts";
+
+/**
+ * Modo "Navegador": publica pelo TikTok Studio na web, controlando o Chromium do container cortes-browser
+ * (mesma rede do hub, CDP em 127.0.0.1:9222). Usa a sessão logada no perfil do robô.
+ *
+ * Não contorna detecção de robô: se o TikTok pedir login ou verificação, o post falha, o hub tenta de novo
+ * mais tarde e o Telegram avisa para resolver na tela remota.
+ */
+const CDP = process.env.ROBOT_CDP_URL || "http://127.0.0.1:9222";
+const UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?from=webapp";
+
+/** Tela remota do robô: mesmo host do painel, porta 10005 (Tailscale Serve). */
+export const robotScreenUrl = () => process.env.ROBOT_SCREEN_URL || settings.publicUrl.replace(/:\d+$/, "") + ":10005";
+
+class NeedsHuman extends Error {}
+
+async function needsHumanCheck(page: Page) {
+  if (/\/login/.test(page.url())) throw new NeedsHuman("o TikTok está deslogado no navegador do robô");
+  const captcha = page.locator('[id*="captcha"], [class*="captcha"], iframe[src*="captcha"]');
+  if (await captcha.first().isVisible().catch(() => false)) throw new NeedsHuman("o TikTok pediu uma verificação (captcha)");
+}
+
+/** Fecha avisos de primeiro uso ("Entendi", "Got it") que cobrem o formulário. */
+async function dismissTips(page: Page) {
+  for (const name of [/^Entendi$/, /^Got it$/, /^OK$/]) {
+    const b = page.getByRole("button", { name }).first();
+    if (await b.isVisible().catch(() => false)) await b.click().catch(() => {});
+  }
+}
+
+export async function tiktokWebUpload(_ch: Channel, clip: Clip, file: string) {
+  const browser = await chromium.connectOverCDP(CDP, { timeout: 20_000 }).catch(() => {
+    throw new Error("navegador do robô fora do ar (container cortes-browser)");
+  });
+  const context = browser.contexts()[0] ?? (await browser.newContext());
+  const page = await context.newPage();
+  try {
+    await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(3000);
+    await needsHumanCheck(page);
+
+    await page.locator('input[type="file"]').first().setInputFiles(file, { timeout: 30_000 });
+
+    // A legenda vem preenchida com o nome do arquivo: substitui pela legenda do corte.
+    const editor = page.locator('.public-DraftEditor-content[contenteditable="true"]').first();
+    await editor.waitFor({ state: "visible", timeout: 120_000 });
+    await dismissTips(page);
+    await editor.click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Delete");
+    await page.keyboard.insertText(clip.caption.slice(0, 4000));
+    await page.keyboard.press("Escape"); // fecha sugestão de hashtag/menção, se abrir
+    await dismissTips(page);
+
+    // Espera o upload terminar ("Enviado") antes de publicar.
+    await page
+      .locator('[data-e2e="upload_status_container"] .info-progress.success, [data-e2e="upload_status_container"]:has-text("Enviado"), [data-e2e="upload_status_container"]:has-text("Uploaded")')
+      .first()
+      .waitFor({ timeout: 10 * 60_000 });
+    await needsHumanCheck(page);
+
+    const post = page.locator('[data-e2e="post_video_button"]');
+    await post.waitFor({ state: "visible", timeout: 60_000 });
+    for (let i = 0; i < 60 && ((await post.isDisabled()) || (await post.getAttribute("aria-disabled")) === "true"); i++) {
+      await page.waitForTimeout(2000);
+    }
+    await post.click();
+
+    // Às vezes o TikTok confirma antes ("Publicar agora" enquanto a verificação de conteúdo roda).
+    const confirm = page.getByRole("button", { name: /^(Publicar agora|Post now)$/ }).first();
+    if (await confirm.isVisible({ timeout: 5000 }).catch(() => false)) await confirm.click();
+
+    // Sucesso: o Studio sai do upload (vai para a lista de publicações) ou mostra o aviso de publicado.
+    await Promise.race([
+      page.waitForURL((u) => !u.pathname.includes("/upload"), { timeout: 3 * 60_000 }),
+      page.getByText(/(foi publicado|sendo publicado|Your video (has been|is being) (posted|uploaded)|Vídeo publicado)/i).first().waitFor({ timeout: 3 * 60_000 }),
+    ]);
+    await needsHumanCheck(page);
+    return { status: "OK" as const, external_id: `web:${Date.now()}`, url: "" };
+  } catch (e) {
+    // Print da tela para entender a falha (data/robot/clip-ID.png).
+    const dir = join(config.dataDir, "robot");
+    mkdirSync(dir, { recursive: true });
+    await page.screenshot({ path: join(dir, `clip-${clip.id}.png`) }).catch(() => {});
+    if (e instanceof NeedsHuman) {
+      void tg.alert(`🤖 Robô do TikTok parado: ${e.message}.\nResolva na tela remota: ${robotScreenUrl()}\nO post será tentado de novo automaticamente.`);
+    }
+    throw new Error(`robô TikTok: ${(e as Error).message.split("\n")[0].slice(0, 300)}`);
+  } finally {
+    await page.close().catch(() => {});
+    await browser.close().catch(() => {}); // em conexão CDP, só desconecta; o Chromium continua aberto
+  }
+}
