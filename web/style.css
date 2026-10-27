@@ -366,3 +366,14 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .pv-tag { position: absolute; transform: translateX(-50%); background: #0e0e0d; color: #fff; font-family: "Archivo SemiBold", Arial, sans-serif; letter-spacing: 3px; }
 .pv-barwrap { position: relative; display: inline-block; }
 .pv-barwrap > i { position: absolute; left: -7px; right: -7px; -webkit-text-stroke: 0; }
+@font-face { font-family: "Oswald"; src: url("/fonts/Oswald-Bold.ttf") format("truetype"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Barlow SemiBold"; src: url("/fonts/Barlow-SemiBold.ttf") format("truetype"); font-display: swap; }
+/* Canais em telas médias: a coluna principal encolhe em vez de empurrar a página para o lado. */
+.channels { grid-template-columns: 240px minmax(0, 1fr); }
+.integ-grid { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+.integ { min-width: 0; }
+.guide code { word-break: break-all; }
+.channel-main { grid-template-columns: minmax(0, 1fr); }
+.form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.form label { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 900px) { .form { grid-template-columns: minmax(0, 1fr); } }

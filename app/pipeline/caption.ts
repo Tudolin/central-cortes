@@ -16,6 +16,7 @@ export function renderCaption(
   const link = timestampLink(job, startS);
   return template
     .replaceAll("{fonte}", job.uploader || job.title)
+    .replaceAll("{titulo_video}", job.title)
     .replaceAll("{pilar}", extra.pillar ?? "")
     .replaceAll("{hashtags_assunto}", extra.hashtags ?? "")
     // O template clássico "{url}?t={ts}s" gera URL inválida quando a URL já tem "?v=".

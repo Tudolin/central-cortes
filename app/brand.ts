@@ -35,7 +35,10 @@ export interface Brand {
   /** Margens exatas (px no quadro 1080x1920); quando definidas, valem no lugar das zonas por plataforma. */
   safe_insets?: Insets | null;
   /** Faixa de título: "brush" (tarja de pincel) ou "bar" (título grande com barra de acento embaixo). */
-  banner?: { style?: "brush" | "bar"; font?: string; size?: number };
+  banner?: {
+    style?: "brush" | "bar"; font?: string; size?: number;
+    persist?: boolean; full_width?: boolean; top?: boolean; tilt?: number; shadow_color?: string; shadow_offset?: number; wrap?: number;
+  };
   /** Crédito da fonte: texto ("{fonte}" = @ do canal original), fonte, cor e se leva caixa escura. */
   credit?: { format?: string; font?: string; color?: string; box?: boolean };
   /** Pilares de conteúdo: a IA escolhe um por corte (vira a tag da capa e o {pilar} da legenda). */
@@ -83,7 +86,10 @@ export interface RenderSpec {
   aspect: Aspect;
   removeSilence: boolean;
   teaser: { start: number; end: number } | null;
-  banner: { style: "brush" | "bar"; font: string; size: number; color: string; text: string; accent: string; tag: string } | null;
+  banner: {
+    style: "brush" | "bar"; font: string; size: number; color: string; text: string; accent: string; tag: string;
+    persist: boolean; fullWidth: boolean; top: boolean; tilt: number; shadowColor: string; shadowOffset: number; wrap: number;
+  } | null;
   subtitle: {
     font: string; size: number; color: string; highlight: string; maxWords: number;
     outline: number; shadow: number; outlineColor: string; active: "color" | "scale";
@@ -168,7 +174,11 @@ export function resolveSpec(ch: Channel, job: Job, clip: Clip, tpl: Template | u
     teaser: wantTeaser && teaserOk ? { start: clip.teaser_start, end: clip.teaser_end } : null,
     banner: ch.title_banner && use("banner")
       ? {
-          style: brand.banner?.style ?? "brush", font: brand.banner?.font || "", size: brand.banner?.size || 150, color: ch.banner_color, text: ch.banner_text_color,
+          style: brand.banner?.style ?? "brush", font: brand.banner?.font || "",
+          size: brand.banner?.size || ((brand.banner?.style ?? "brush") === "bar" ? 150 : 108), color: ch.banner_color, text: ch.banner_text_color,
+          persist: !!brand.banner?.persist, fullWidth: !!brand.banner?.full_width, top: !!brand.banner?.top,
+          tilt: brand.banner?.tilt ?? 2, shadowColor: brand.banner?.shadow_color || "", shadowOffset: brand.banner?.shadow_offset ?? 10,
+          wrap: brand.banner?.wrap || 15,
           accent: ch.highlight_color, tag: clip.pillar || "",
         }
       : null,

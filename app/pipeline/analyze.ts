@@ -118,7 +118,7 @@ Para cada corte:
 - score_viral: 0 a 100, calibrado (90+ só para trechos excepcionais).
 - gancho_impacto: uma frase explicando por que o trecho prende a atenção.
 ${ch.title_style === "sentence"
-    ? "- titulo_corte: o gancho reescrito como título em caixa normal (maiúscula só no início e em nomes próprios, nunca o título inteiro em caixa alta), até 60 caracteres, no máximo um emoji, fiel ao que é dito (sem inventar fatos)."
+    ? "- titulo_corte: o gancho reescrito como título em caixa normal (maiúscula só no início e em nomes próprios, nunca o título inteiro em caixa alta), até 70 caracteres, no máximo um emoji, fiel ao que é dito (sem inventar fatos)."
     : "- titulo_corte: título em CAIXA ALTA, até 70 caracteres, chamativo mas fiel ao que é dito (sem inventar fatos)."}
 ${layoutRule}
 - zoom_on_emphasis: true quando há picos de ênfase que merecem punch-in.

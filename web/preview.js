@@ -89,7 +89,10 @@ export function previewConfig(i) {
     banner: !!Number(i.ch.title_banner ?? 1) && use("banner")
       ? {
           title: (i.title || "ESTE É O TÍTULO DO CORTE").toUpperCase(), color: i.ch.banner_color, text: i.ch.banner_text_color,
-          style: b.banner?.style || "brush", font: b.banner?.font || "Impact", size: Number(b.banner?.size) || 150, accent: i.ch.highlight_color || "#FFD700",
+          style: b.banner?.style || "brush", font: b.banner?.font || "Impact",
+          size: Number(b.banner?.size) || ((b.banner?.style || "brush") === "bar" ? 150 : 108), accent: i.ch.highlight_color || "#FFD700",
+          persist: !!b.banner?.persist, fullWidth: !!b.banner?.full_width, top: !!b.banner?.top, tilt: Number(b.banner?.tilt ?? 2),
+          shadowColor: b.banner?.shadow_color || "", shadowOffset: Number(b.banner?.shadow_offset ?? 10), wrap: Number(b.banner?.wrap) || 15,
           tag: i.pillar ?? (b.pillars ?? [])[0] ?? "", keywords: i.keywords ?? [],
         }
       : null,
@@ -124,7 +127,7 @@ export function previewConfig(i) {
 // ---------- Camadas ----------
 
 // Tamanho do ASS → px de CSS: o libass usa a altura de linha da fonte (ascendente + descendente) como tamanho.
-const FONT_RATIO = { anton: 1.733, "archivo semibold": 1.51 };
+const FONT_RATIO = { anton: 1.733, "archivo semibold": 1.51, oswald: 1.702, "barlow semibold": 1.361 };
 const fsOf = (font) => 1 / (FONT_RATIO[String(font || "").toLowerCase()] ?? 1.16);
 const FS = fsOf("");
 
@@ -183,26 +186,41 @@ function barBannerLayer(c) {
 function bannerLayer(c) {
   const b = c.banner;
   if (b.style === "bar") return barBannerLayer(c);
-  let size = Math.round(108 * c.k);
-  let lines = balanced(b.title, 15);
+  let size = Math.round(b.size * c.k);
+  let lines = balanced(b.title, b.wrap);
   if (lines.length > 3) {
-    size = Math.round(86 * c.k);
-    lines = balanced(b.title, 21);
+    size = Math.round(b.size * 0.8 * c.k);
+    lines = balanced(b.title, Math.round(b.wrap * 1.4));
   }
   const textW = Math.max(...lines.map((l) => l.length)) * size * 0.5;
-  const w = Math.round(Math.min(Math.min(960, c.W * 0.89), Math.max(560 * c.k, textW + 90 * c.k)));
-  const h = Math.round(lines.length * size + 50);
+  const maxW = b.fullWidth ? c.W - c.safe.left - c.safe.right : Math.min(c.W - c.safe.left - c.safe.right, c.W * 0.89);
+  const w = b.fullWidth ? maxW : Math.round(Math.min(maxW, Math.max(560 * c.k, textW + 90 * c.k)));
+  const h = Math.round(lines.length * size + 50 * c.k);
+  const cx = b.fullWidth ? (c.safe.left + c.W - c.safe.right) / 2 : c.W / 2;
+  const top = b.top ? c.safe.top : c.bannerY - h / 2;
   // Borda de pincel: polígono com pequenas irregularidades, como no render.
   let s = 7;
   const rnd = (a) => ((s = (s * 9301 + 49297) % 233280) / 233280 - 0.5) * 2 * a;
   const pts = [];
-  for (let x = 0; x <= 100; x += 5) pts.push(`${x}% ${(rnd(7) / h) * 100 + 0}%`);
-  for (let y = 10; y < 100; y += 15) pts.push(`${100 + (rnd(9) / w) * 100}% ${y}%`);
-  for (let x = 100; x >= 0; x -= 5) pts.push(`${x}% ${100 + (rnd(7) / h) * 100}%`);
-  for (let y = 90; y > 0; y -= 15) pts.push(`${(rnd(9) / w) * 100}% ${y}%`);
-  return `<div data-a="0" data-b="${BANNER_END}" data-fade="0.5" class="pv-banner" style="left:${c.W / 2 - w / 2}px;top:${c.bannerY - h / 2}px;width:${w}px;height:${h}px">
-    <div class="pv-banner-box" style="background:${c.banner.color};clip-path:polygon(${pts.join(",")})"></div>
-    <div class="pv-banner-text" style="font-size:${size * FS * 1.05}px;line-height:${size}px;color:${b.text};-webkit-text-stroke:${Math.round(10 * c.k)}px #000">${lines.map(esc).join("<br>")}</div>
+  if (b.fullWidth) {
+    // Papel rasgado em cima e embaixo, laterais retas (como no render).
+    for (let x = 0; x <= 100; x += 2) pts.push(`${x}% ${(rnd(9) / h) * 100}%`);
+    for (let x = 100; x >= 0; x -= 2) pts.push(`${x}% ${100 + (rnd(9) / h) * 100}%`);
+  } else {
+    for (let x = 0; x <= 100; x += 5) pts.push(`${x}% ${(rnd(7) / h) * 100 + 0}%`);
+    for (let y = 10; y < 100; y += 15) pts.push(`${100 + (rnd(9) / w) * 100}% ${y}%`);
+    for (let x = 100; x >= 0; x -= 5) pts.push(`${x}% ${100 + (rnd(7) / h) * 100}%`);
+    for (let y = 90; y > 0; y -= 15) pts.push(`${(rnd(9) / w) * 100}% ${y}%`);
+  }
+  const clip = `clip-path:polygon(${pts.join(",")})`;
+  const off = b.shadowOffset * c.k;
+  const shadow = b.shadowColor
+    ? `<div class="pv-banner-box" style="background:${b.shadowColor};${clip};transform:translate(${off}px,${off}px);box-shadow:none"></div>`
+    : "";
+  const when = b.persist ? `data-a="0" data-b="${c.main}"` : `data-a="0" data-b="${BANNER_END}" data-fade="0.5"`;
+  return `<div ${when} class="pv-banner" style="left:${cx - w / 2}px;top:${top}px;width:${w}px;height:${h}px;transform:rotate(${-b.tilt}deg)">
+    ${shadow}<div class="pv-banner-box" style="background:${c.banner.color};${clip}${b.shadowColor ? ";box-shadow:none" : ""}"></div>
+    <div class="pv-banner-text" style="font-family:'${esc(b.font)}',Impact,sans-serif;font-weight:700;font-size:${size * fsOf(b.font) * (b.font === "Impact" ? 1.05 : 1)}px;line-height:${size}px;color:${b.text};-webkit-text-stroke:${Math.round(10 * c.k)}px #000">${lines.map(esc).join("<br>")}</div>
   </div>`;
 }
 
@@ -211,7 +229,7 @@ function subLayer(c) {
   const shadow = s.shadow ? `text-shadow:${s.shadow * c.k}px ${s.shadow * c.k}px 0 rgba(0,0,0,.6)` : "text-shadow:none";
   const base = `left:80px;right:80px;font-family:'${esc(s.font)}',Arial Black,sans-serif;font-size:${s.size * c.k * fsOf(s.font)}px;color:${s.color};-webkit-text-stroke:${Math.round(2 * s.outline * c.k)}px ${s.outlineColor};${shadow}`;
   const pos = c.split ? `top:${c.H / 2}px;transform:translateY(-50%)` : `bottom:${c.subMarginV}px`;
-  const alt = c.split && c.banner ? `<div class="pv-sub" data-sub data-a="0" data-b="${BANNER_END}" style="${base};top:${c.H / 2 + 190}px"></div>` : "";
+  const alt = c.split && c.banner && !c.banner.top ? `<div class="pv-sub" data-sub data-a="0" data-b="${BANNER_END}" style="${base};top:${c.H / 2 + 190}px"></div>` : "";
   const from = alt ? BANNER_END : 0;
   return `${alt}<div class="pv-sub" data-sub data-a="${from}" data-b="${c.main}" style="${base};${pos}"></div>`;
 }
@@ -244,9 +262,14 @@ function logoLayer(c) {
     return `<div class="pv-abs" style="left:${c.safe.left + m}px;top:${c.safe.top + m}px;display:grid;gap:14px;justify-items:start">
       <img src="${esc(l.url)}" style="width:${w}px;opacity:${l.opacity}" alt="">${c.credit ? creditHtml(c) : ""}</div>`;
   }
+  if (l.position === "bottom-left") {
+    // Crédito logo acima do selo; a legenda sobe para não encostar (ajustado no tick pela altura real).
+    return `<div class="pv-abs" data-logostack style="left:${c.safe.left + m}px;bottom:${c.safe.bottom + m}px;display:grid;gap:12px;justify-items:start">
+      ${c.credit ? creditHtml(c) : ""}<img src="${esc(l.url)}" style="width:${w}px;opacity:${l.opacity}" alt=""></div>`;
+  }
   const x = hx === "left" ? `left:${c.safe.left + m}px` : `right:${c.safe.right + m}px`;
   const y = vy === "top" ? `top:${c.safe.top + m}px` : `bottom:${c.safe.bottom + m}px`;
-  return `<img class="pv-abs" src="${esc(l.url)}" style="${x};${y};width:${w}px;opacity:${l.opacity}" alt="">`;
+  return `<img class="pv-abs" data-logostack src="${esc(l.url)}" style="${x};${y};width:${w}px;opacity:${l.opacity}" alt="">`;
 }
 
 function ctaLayer(c) {
@@ -265,7 +288,7 @@ function ctaLayer(c) {
 }
 
 function creditLayer(c) {
-  if (c.logo?.position === "top-left") return ""; // já vai junto do logo
+  if (c.logo?.position === "top-left" || c.logo?.position === "bottom-left") return ""; // já vai junto do logo
   return `<div class="pv-abs" style="left:${c.safe.left + 20}px;top:${c.safe.top + 20}px">${creditHtml(c)}</div>`;
 }
 
@@ -438,6 +461,12 @@ function tick(pv, dt) {
       return style ? `<span style="${style}">${w}</span>` : w;
     }).join(" ");
     f.querySelectorAll("[data-sub]").forEach((s) => (s.innerHTML = html));
+    // Logo embaixo: a legenda sobe acima do selo e do crédito, como no render.
+    const stack = f.querySelector("[data-logostack]");
+    if (stack && c.vertical && !c.split && c.logo?.position.startsWith("bottom")) {
+      const minB = c.safe.bottom + 24 + stack.offsetHeight + 30;
+      f.querySelectorAll("[data-sub]").forEach((s) => (s.style.bottom = `${Math.max(c.subMarginV, minB)}px`));
+    }
     // Zoom de ritmo do modelo (leve, a cada N segundos), como o zoompan do render.
     const wrap = f.querySelector("[data-bgwrap]");
     if (wrap) {

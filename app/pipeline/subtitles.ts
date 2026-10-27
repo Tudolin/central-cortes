@@ -19,7 +19,7 @@ export interface SubtitleOptions {
   bannerAvoid?: { align: number; marginV: number };
   banner?: BannerOptions;
   lowerThird?: LowerThirdOptions;
-  credit?: { text: string; x: number; y: number; font: string; color: string; box: boolean };
+  credit?: { text: string; x: number; y: number; font: string; color: string; box: boolean; anchor: "top" | "bottom" };
 }
 
 export interface LowerThirdOptions {
@@ -54,6 +54,13 @@ export interface BannerOptions {
   height: number;
   duration: number;
   seed: number; // borda "pincelada" determinística por corte
+  persist: boolean; // fica o vídeo inteiro (vira a capa no grid) em vez de só 2 s
+  fullWidth: boolean; // largura total menos as margens, laterais retas e bordas de papel rasgado em cima e embaixo
+  tilt: number; // graus
+  shadowColor: string; // "" = sombra preta translúcida; cor = sombra chapada deslocada
+  shadowOffset: number;
+  wrap: number; // letras por linha
+  topY: number | null; // topo fixo do bloco (colado na margem segura), em vez de centralizado em centerY
 }
 
 const BANNER_SECONDS = 2;
@@ -88,21 +95,22 @@ function bannerEvents(b: BannerOptions): string[] {
     while (lim > 8 && wrapTitle(text, lim - 1).length === n) lim--;
     return wrapTitle(text, lim);
   };
-  let size = Math.round(108 * b.k);
-  let lines = balanced(15);
+  let size = Math.round(b.size * b.k);
+  let lines = balanced(b.wrap);
   if (lines.length > 3) {
-    size = Math.round(86 * b.k);
-    lines = balanced(21);
+    size = Math.round(b.size * 0.8 * b.k);
+    lines = balanced(Math.round(b.wrap * 1.4));
   }
   const lineH = size * 1.0;
-  const h = Math.round(lines.length * lineH + 50);
+  const h = Math.round(lines.length * lineH + 50 * b.k);
   // Largura acompanha a linha mais longa (Impact ≈ 0,5 em por caractere), como nas capas de corte.
   const textW = Math.max(...lines.map((l) => l.length)) * size * 0.5;
-  const w = Math.round(Math.min(b.maxWidth, Math.max(560 * b.k, textW + 90 * b.k)));
+  const w = b.fullWidth ? Math.round(b.maxWidth) : Math.round(Math.min(b.maxWidth, Math.max(560 * b.k, textW + 90 * b.k)));
   const x0 = Math.round(b.centerX - w / 2);
   const x1 = x0 + w;
-  const y0 = Math.round(b.centerY - h / 2);
+  const y0 = Math.round(b.topY ?? b.centerY - h / 2);
   const y1 = y0 + h;
+  const cy = (y0 + y1) / 2;
 
   // Pseudo-aleatório determinístico (mesmo corte → mesma borda em re-renders).
   let s = b.seed * 9301 + 49297;
@@ -111,19 +119,29 @@ function bannerEvents(b: BannerOptions): string[] {
     return Math.round((s / 233280 - 0.5) * 2 * amp);
   };
   const pts: [number, number][] = [];
-  for (let x = x0; x <= x1; x += 46) pts.push([x, y0 + rnd(7)]);
-  for (let y = y0 + 30; y < y1; y += 30) pts.push([x1 + rnd(9), y]);
-  for (let x = x1; x >= x0; x -= 46) pts.push([x, y1 + rnd(7)]);
-  for (let y = y1 - 30; y > y0; y -= 30) pts.push([x0 + rnd(9), y]);
+  if (b.fullWidth) {
+    // Papel rasgado: recortes miúdos em cima e embaixo, laterais retas.
+    for (let x = x0; x <= x1; x += 22) pts.push([x, y0 + rnd(9)]);
+    for (let x = x1; x >= x0; x -= 22) pts.push([x, y1 + rnd(9)]);
+  } else {
+    for (let x = x0; x <= x1; x += 46) pts.push([x, y0 + rnd(7)]);
+    for (let y = y0 + 30; y < y1; y += 30) pts.push([x1 + rnd(9), y]);
+    for (let x = x1; x >= x0; x -= 46) pts.push([x, y1 + rnd(7)]);
+    for (let y = y1 - 30; y > y0; y -= 30) pts.push([x0 + rnd(9), y]);
+  }
   const shape = `m ${pts[0][0]} ${pts[0][1]} l ${pts.slice(1).map(([x, y]) => `${x} ${y}`).join(" ")}`;
 
-  const rot = `\\org(${Math.round(b.centerX)},${Math.round(b.centerY)})\\frz2`;
-  // Só a abertura: 2 s visível + 0,5 s de fade out. O quadro de 1,5 s (miniatura/capa) ainda mostra o título.
-  const end = assTime(Math.min(b.duration, BANNER_SECONDS + BANNER_FADE / 1000));
-  const fade = `\\fad(0,${BANNER_FADE})`;
+  const rot = b.tilt ? `\\org(${Math.round(b.centerX)},${Math.round(cy)})\\frz${b.tilt}` : "";
+  // Padrão: só a abertura (2 s + 0,5 s de fade); o quadro de 1,5 s (miniatura/capa) ainda mostra o título.
+  // persist: o vídeo todo, sem fade.
+  const end = assTime(b.persist ? b.duration + 1 : Math.min(b.duration, BANNER_SECONDS + BANNER_FADE / 1000));
+  const fade = b.persist ? "" : `\\fad(0,${BANNER_FADE})`;
+  const shadow = b.shadowColor
+    ? `\\shad${Math.round(b.shadowOffset * b.k)}\\4c${assColor(b.shadowColor)}\\4a&H00&`
+    : `\\shad8\\4a&H80&`;
   return [
-    `Dialogue: 0,0:00:00.00,${end},BannerBox,,0,0,0,,{\\an7\\pos(0,0)${rot}${fade}\\c${assColor(b.color)}\\bord0\\shad8\\4a&H80&\\p1}${shape}{\\p0}`,
-    `Dialogue: 1,0:00:00.00,${end},BannerText,,0,0,0,,{\\an5\\pos(${Math.round(b.centerX)},${Math.round(b.centerY + 4)})${rot}${fade}\\fs${size}}${lines.join("\\N")}`,
+    `Dialogue: 0,0:00:00.00,${end},BannerBox,,0,0,0,,{\\an7\\pos(0,0)${rot}${fade}\\c${assColor(b.color)}\\bord0${shadow}\\p1}${shape}{\\p0}`,
+    `Dialogue: 1,0:00:00.00,${end},BannerText,,0,0,0,,{\\an5\\pos(${Math.round(b.centerX)},${Math.round(cy + 4 * b.k)})${rot}${fade}\\fs${size}}${lines.join("\\N")}`,
   ];
 }
 
@@ -272,7 +290,8 @@ export function buildAss(words: Word[], keywords: string[], o: SubtitleOptions):
   if (o.lowerThird) events.push(...lowerThirdEvents(o.lowerThird, o.res.k));
   if (o.credit) {
     const end = assTime(Math.max(...words.map((w) => w.e), o.banner?.duration ?? 0, 1) + 1);
-    events.push(`Dialogue: 3,0:00:00.00,${end},Credit,,0,0,0,,{\\an7\\pos(${o.credit.x},${o.credit.y})}${clean(o.credit.text)}`);
+    const an = o.credit.anchor === "bottom" ? 1 : 7;
+    events.push(`Dialogue: 3,0:00:00.00,${end},Credit,,0,0,0,,{\\an${an}\\pos(${o.credit.x},${o.credit.y})}${clean(o.credit.text)}`);
   }
   const k = o.res.k;
   const fs = (n: number) => Math.round(n * k);

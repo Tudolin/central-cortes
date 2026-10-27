@@ -597,7 +597,7 @@ const CH_FIELDS = [
   ["title_style", "Títulos dos posts", { select: [["upper", "CAIXA ALTA"], ["sentence", "Caixa normal (só a primeira letra)"]] }],
   ["banner_color", "Cor da faixa", { type: "color" }],
   ["banner_text_color", "Cor do texto da faixa", { type: "color" }],
-  ["caption_template", "Template de legenda social — {titulo_corte} {url_com_timestamp} {url_video_original} {timestamp_segundos}", { area: true, full: true, rows: 10 }],
+  ["caption_template", "Template de legenda social — {titulo_corte} {url_com_timestamp} {url_video_original} {timestamp_segundos} {fonte} {titulo_video} {pilar} {hashtags_assunto}", { area: true, full: true, rows: 10 }],
   ["h", "Agenda e publicação"],
   ["schedule_slots", "Horários diários (HH:MM separados por vírgula)", { full: true }],
   ["publish_targets", "Publicar em", { targets: true, full: true }],
@@ -828,7 +828,7 @@ const ASSET_SLOTS = [
   ["logo", "Logo / marca d'água", "image/png,image/jpeg,image/webp"],
   ["music", "Trilha de fundo", "audio/*"],
 ];
-const FONTS = ["Anton", "Archivo SemiBold", "Arial Black", "Montserrat ExtraBold", "Impact", "Bebas Neue"];
+const FONTS = ["Oswald", "Barlow SemiBold", "Anton", "Archivo SemiBold", "Arial Black", "Montserrat ExtraBold", "Impact", "Bebas Neue"];
 const useOf = (t) => new Set(JSON.parse(t?.use_items || '["banner"]'));
 const brandOf = (ch) => JSON.parse(ch?.brand || "{}");
 const opt = (pairs, cur) => pairs.map(([v, l]) => `<option value="${v}" ${String(cur) === v ? "selected" : ""}>${esc(l)}</option>`).join("");
@@ -931,7 +931,17 @@ function renderBrand() {
       <h3>Faixa de título (capa nos primeiros 2 s)</h3>
       <label>Estilo <select name="banner_style">${opt([["brush", "Tarja de pincel (cor da faixa + texto)"], ["bar", "Capa: título grande, uma palavra em destaque e barra embaixo"]], b.banner?.style ?? "brush")}</select></label>
       <label>Fonte do título <input name="banner_font" value="${esc(b.banner?.font ?? "")}" placeholder="padrão (Impact)" list="dl-fonts"></label>
-      <label>Tamanho do título (estilo capa) <input name="banner_size" type="number" min="60" max="400" value="${b.banner?.size ?? 150}"></label>
+      <label>Tamanho do título <input name="banner_size" type="number" min="60" max="400" value="${b.banner?.size ?? ""}" placeholder="padrão"></label>
+      <label>Letras por linha <input name="banner_wrap" type="number" min="8" max="40" value="${b.banner?.wrap ?? 15}"></label>
+      <label>Inclinação (graus) <input name="banner_tilt" type="number" step="0.5" min="-10" max="10" value="${b.banner?.tilt ?? 2}"></label>
+      <label>Sombra chapada (cor) <input name="banner_shadow" type="color" value="${b.banner?.shadow_color || "#000000"}"></label>
+      <label>Deslocamento da sombra (px) <input name="banner_shadow_offset" type="number" min="0" max="40" value="${b.banner?.shadow_offset ?? 10}"></label>
+      <div class="full checks wrap">
+        <label><input type="checkbox" name="banner_persist" ${b.banner?.persist ? "checked" : ""}> Fica o vídeo inteiro</label>
+        <label><input type="checkbox" name="banner_full" ${b.banner?.full_width ? "checked" : ""}> Largura total, bordas rasgadas</label>
+        <label><input type="checkbox" name="banner_top" ${b.banner?.top ? "checked" : ""}> Colada na margem do topo</label>
+        <label><input type="checkbox" name="banner_solid_shadow" ${b.banner?.shadow_color ? "checked" : ""}> Usar sombra chapada</label>
+      </div>
       <h3>Legendas</h3>
       <label>Fonte <input name="sub_font" value="${esc(b.subtitle?.font ?? "")}" placeholder="padrão do worker" list="dl-fonts"><datalist id="dl-fonts">${FONTS.map((f) => `<option value="${f}">`).join("")}</datalist></label>
       <label>Tamanho <input name="sub_size" type="number" min="40" max="160" value="${b.subtitle?.size ?? 84}"></label>
@@ -983,7 +993,11 @@ function brandFromForm(form) {
     safe_insets: ["top", "bottom", "left", "right"].every((k) => fd[`safe_${k}`] !== "")
       ? { top: Number(fd.safe_top), bottom: Number(fd.safe_bottom), left: Number(fd.safe_left), right: Number(fd.safe_right) }
       : null,
-    banner: { style: fd.banner_style, font: fd.banner_font, size: Number(fd.banner_size) || 150 },
+    banner: {
+      style: fd.banner_style, font: fd.banner_font, size: Number(fd.banner_size) || undefined, wrap: Number(fd.banner_wrap) || 15,
+      tilt: Number(fd.banner_tilt), persist: !!fd.banner_persist, full_width: !!fd.banner_full, top: !!fd.banner_top,
+      shadow_color: fd.banner_solid_shadow ? fd.banner_shadow : "", shadow_offset: Number(fd.banner_shadow_offset),
+    },
     credit: { format: fd.credit_format, font: fd.credit_font, color: fd.credit_color, box: !!fd.credit_box },
     pillars: String(fd.pillars || "").split(",").map((p) => p.trim().toUpperCase()).filter(Boolean),
   };

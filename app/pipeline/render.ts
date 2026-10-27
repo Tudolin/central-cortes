@@ -158,19 +158,27 @@ export async function renderClip(
     // Dividido: legenda na emenda entre os dois rostos; durante a faixa de título, logo abaixo dela.
     subAlign = 5;
     subMarginV = 0;
-    bannerAvoid = { align: 8, marginV: OUT.h / 2 + 190 };
+    if (!spec.banner?.top) bannerAvoid = { align: 8, marginV: OUT.h / 2 + 190 }; // faixa no topo não disputa a emenda
   }
   const bannerY = vertical ? Math.max(plan.bannerY, safe.top + 170) : plan.bannerY;
   const k = vertical ? 1 : 0.75;
 
   const keywords = JSON.parse(clip.keywords) as string[];
   // Crédito logo abaixo do logo/selo quando ele fica no canto superior esquerdo (alinhados).
+  // Logo embaixo: crédito logo acima dele e a legenda sobe para não encostar nos dois.
   let creditY = safe.top + 20;
+  let creditAnchor: "top" | "bottom" = "top";
   let logoInfo: MediaInfo | null = null;
   if (spec.logo) {
     logoInfo = await probe(assets.get(spec.logo.asset.id)!);
-    if (spec.logo.position === "top-left" && logoInfo.width) {
-      creditY = safe.top + 24 + Math.round((OUT.w * spec.logo.scale * logoInfo.height) / logoInfo.width) + 14;
+    const logoH = logoInfo.width ? Math.round((OUT.w * spec.logo.scale * logoInfo.height) / logoInfo.width) : 0;
+    if (spec.logo.position === "top-left" && logoH) creditY = safe.top + 24 + logoH + 14;
+    if (spec.logo.position.startsWith("bottom") && logoH) {
+      if (spec.logo.position === "bottom-left") {
+        creditY = OUT.h - safe.bottom - 24 - logoH - 12;
+        creditAnchor = "bottom";
+      }
+      if (vertical && !split) subMarginV = Math.max(subMarginV, safe.bottom + 24 + logoH + (spec.credit ? 12 + 44 : 0) + 30);
     }
   }
   const assName = `clip-${clip.id}.ass`;
@@ -193,8 +201,12 @@ export async function renderClip(
       banner: spec.banner
         ? {
             title: clip.title, font: spec.banner.font || config.render.titleFont, color: spec.banner.color, textColor: spec.banner.text,
+            persist: spec.banner.persist, fullWidth: spec.banner.fullWidth, tilt: spec.banner.tilt, shadowColor: spec.banner.shadowColor,
+            shadowOffset: spec.banner.shadowOffset, wrap: spec.banner.wrap,
+            topY: spec.banner.top && spec.banner.style === "brush" ? safe.top : null,
             centerY: spec.banner.style === "bar" && vertical && !split ? Math.max(bannerY, safe.top + 330) : bannerY,
-            centerX: OUT.w / 2, maxWidth: Math.min(OUT.w - safe.left - safe.right, OUT.w * 0.89), k, duration: main, seed: clip.id,
+            centerX: spec.banner.fullWidth ? (safe.left + OUT.w - safe.right) / 2 : OUT.w / 2,
+            maxWidth: spec.banner.fullWidth ? OUT.w - safe.left - safe.right : Math.min(OUT.w - safe.left - safe.right, OUT.w * 0.89), k, duration: main, seed: clip.id,
             style: spec.banner.style, size: spec.banner.size, minTop: vertical ? safe.top + 250 : safe.top + 40, accent: spec.banner.accent, keywords, tag: spec.banner.tag,
             tagFont: spec.credit?.font || spec.subtitle.font || config.render.font, dim: spec.banner.style === "bar", width: OUT.w, height: OUT.h,
           }
@@ -208,7 +220,9 @@ export async function renderClip(
             y: split || !vertical ? OUT.h - safe.bottom - 40 : OUT.h - subMarginV - 240,
           }
         : undefined,
-      credit: spec.credit ? { ...spec.credit, x: safe.left + (spec.logo?.position === "top-left" ? 24 : 20), y: creditY } : undefined,
+      credit: spec.credit
+        ? { ...spec.credit, x: safe.left + (spec.logo?.position.endsWith("left") ? 24 : 20), y: creditY, anchor: creditAnchor }
+        : undefined,
     }),
   );
 
