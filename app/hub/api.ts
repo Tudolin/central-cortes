@@ -15,7 +15,7 @@ import { approve, needsTikTokChoices, rebalance, reject } from "./schedule.ts";
 import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
 import { chatCandidates, telegramBotInfo, telegramTest, tg } from "./telegram.ts";
 import { diskState } from "./disk.ts";
-import { youtubeCookies, youtubeLoginOpen, robotAdoptMain, robotLoginCancel, robotLoginFinish, robotLoginStart, robotLogout, robotScreenUrl, robotStatus } from "./publish/tiktokWeb.ts";
+import { removeYoutubeCookies, saveYoutubeCookies, youtubeCookiesSource, youtubeCookies, youtubeLoginOpen, robotAdoptMain, robotLoginCancel, robotLoginFinish, robotLoginStart, robotLogout, robotScreenUrl, robotStatus } from "./publish/tiktokWeb.ts";
 
 const publicChannel = (c: Channel) => {
   const creds = credentialsOf(c);
@@ -76,7 +76,7 @@ route("GET", "/api/settings", async () => {
     redirects: base ? { youtube: youtubeRedirect(), tiktok: tiktokRedirect() } : null,
     telegram: { bot: await telegramBotInfo(), candidates: [...chatCandidates.values()] },
     youtubeDownload: await Promise.race([
-      youtubeCookies().then((c) => ({ loggedIn: !!c }), (e) => ({ loggedIn: false, error: (e as Error).message })),
+      youtubeCookies().then((c) => ({ loggedIn: !!c, uploaded: youtubeCookiesSource() }), (e) => ({ loggedIn: false, error: (e as Error).message })),
       new Promise((r) => setTimeout(() => r({ loggedIn: false, error: "robô não respondeu" }), 8000)),
     ]),
   };
@@ -320,6 +320,21 @@ route("POST", "/api/youtube-download/login", async () => {
     throw new HttpError(409, (e as Error).message);
   }
   return { ok: true, screen: robotScreenUrl() };
+});
+
+route("POST", "/api/youtube-download/cookies", async (req) => {
+  const chunks: Buffer[] = [];
+  for await (const c of req as AsyncIterable<Buffer>) chunks.push(c);
+  try {
+    saveYoutubeCookies(Buffer.concat(chunks).toString("utf8"));
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message);
+  }
+  return { ok: true };
+});
+route("DELETE", "/api/youtube-download/cookies", () => {
+  removeYoutubeCookies();
+  return { ok: true };
 });
 
 route("GET", "/api/worker/youtube-cookies", async (_q, res) => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
 import { config } from "../../config.ts";
@@ -107,8 +107,25 @@ export async function robotAdoptMain(channelId: string) {
 
 const YT_AUTH = ["LOGIN_INFO", "SAPISID", "__Secure-3PSID", "SID"];
 
-/** Cookies do YouTube/Google da janela principal (Netscape) ou null se não houver conta logada. */
+/** cookies.txt enviado pelo painel (exportado de um navegador comum): tem prioridade sobre o robô. */
+const uploadedCookiesPath = () => join(robotDir(), "youtube-cookies.txt");
+const hasYoutubeAuth = (txt: string) =>
+  txt.split(/\r?\n/).some((l) => {
+    const f = l.split("\t");
+    return f.length >= 7 && /youtube\.com$/.test(f[0].replace(/^#HttpOnly_/, "")) && YT_AUTH.includes(f[5]);
+  });
+
+export function saveYoutubeCookies(txt: string) {
+  if (!/^# (Netscape )?HTTP Cookie File/m.test(txt) && !txt.includes("\t")) throw new Error("Arquivo não está no formato cookies.txt (Netscape)");
+  if (!hasYoutubeAuth(txt)) throw new Error("O arquivo não tem a sessão do YouTube: exporte estando logado em youtube.com");
+  writeFileSync(uploadedCookiesPath(), txt);
+}
+export const removeYoutubeCookies = () => rmSync(uploadedCookiesPath(), { force: true });
+export const youtubeCookiesSource = () => (existsSync(uploadedCookiesPath()) ? statSync(uploadedCookiesPath()).mtime.toISOString() : null);
+
+/** Cookies do YouTube (Netscape): o arquivo enviado pelo painel ou, sem ele, a janela principal do robô. */
 export async function youtubeCookies(): Promise<string | null> {
+  if (existsSync(uploadedCookiesPath())) return readFileSync(uploadedCookiesPath(), "utf8");
   const browser = await connect();
   try {
     const main = browser.contexts()[0];

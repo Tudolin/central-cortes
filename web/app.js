@@ -781,10 +781,19 @@ function renderIntegrations() {
       <div class="integ">
         <div class="integ-head"><b>⬇ YouTube para downloads</b>
           ${settingsData.youtubeDownload?.loggedIn ? '<span class="ok-dot">conta logada no robô</span>' : '<span class="muted">sem conta</span>'}</div>
-        <div class="muted help">Quando o YouTube bloqueia os downloads ("confirme que você não é um robô"), o worker usa uma conta do Google logada no navegador do robô. Use uma conta secundária: ela só é usada para assistir vídeos públicos.</div>
+        <div class="muted help">Quando o YouTube bloqueia os downloads ("confirme que você não é um robô"), o worker baixa com uma sessão logada do YouTube. Use uma conta secundária: ela só é usada para assistir vídeos públicos.</div>
+        ${guide("ytcookies", `<ol>
+          <li>No Chrome do seu PC, instale a extensão <b>Get cookies.txt LOCALLY</b> e, nos detalhes dela, ative <b>Permitir no modo anônimo</b>.</li>
+          <li>Abra uma <b>janela anônima</b>, entre em <code>youtube.com</code> com a conta secundária.</li>
+          <li>Na mesma aba, abra <code>youtube.com/robots.txt</code>, clique na extensão e em <b>Export</b> (formato Netscape).</li>
+          <li><b>Feche a janela anônima</b> sem sair da conta (assim a sessão exportada não é trocada).</li>
+          <li>Clique em <b>Enviar cookies.txt</b> aqui e escolha o arquivo baixado.</li>
+        </ol>`)}
+        ${settingsData.youtubeDownload?.uploaded ? `<div class="muted" style="font-size:12px">cookies.txt enviado em ${when(settingsData.youtubeDownload.uploaded)}</div>` : ""}
         <div class="actions">
-          <button class="btn small primary" type="button" data-yt-login>${settingsData.youtubeDownload?.loggedIn ? "Trocar conta" : "Entrar no YouTube pelo robô"}</button>
-          <a class="btn small" href="${esc(state.integrations.robotScreen)}" target="_blank" rel="noopener">Abrir tela remota</a>
+          <label class="btn small primary">Enviar cookies.txt<input type="file" hidden accept=".txt,text/plain" data-yt-cookies></label>
+          ${settingsData.youtubeDownload?.uploaded ? `<button class="btn small danger" type="button" data-yt-cookies-remove>Remover</button>` : ""}
+          <button class="btn small" type="button" data-yt-login title="O Google pode recusar login em navegador automatizado">Tentar login pelo robô</button>
         </div>
       </div>
 
@@ -1363,6 +1372,11 @@ document.addEventListener("click", act(async (e) => {
     toast("Login do Google aberto na tela remota do robô — entre com a conta e depois volte aqui");
     setTimeout(() => loadSettings().catch(() => {}), 60_000);
   }
+  if (t.dataset.ytCookiesRemove !== undefined && confirm("Remover o cookies.txt do YouTube?")) {
+    t.blur();
+    await api("/api/youtube-download/cookies", { method: "DELETE" });
+    await loadSettings();
+  }
   if (t.dataset.retryAll !== undefined) {
     const r = await api("/api/jobs/retry-failed", { method: "POST" });
     toast(`${r.retried} job(s) de volta para a fila`);
@@ -1474,6 +1488,15 @@ $("#integrations").addEventListener("toggle", (e) => {
   if (e.target.open) openGuides.add(id);
   else openGuides.delete(id);
 }, true);
+$("#integrations").addEventListener("change", act(async (e) => {
+  if (e.target.dataset.ytCookies === undefined || !e.target.files[0]) return;
+  const r = await fetch("/api/youtube-download/cookies", { method: "POST", headers: { "content-type": "text/plain" }, body: await e.target.files[0].text() });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  e.target.blur();
+  toast("cookies.txt do YouTube salvo — os próximos downloads já usam");
+  await loadSettings();
+}));
 $("#integrations").addEventListener("submit", act(async (e) => {
   e.preventDefault();
   await saveSettingsForm(e.target);
