@@ -5,33 +5,51 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Central de Cortes</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <header class="top">
-    <div class="brand"><span class="brand-mark"></span>CORTES<span class="brand-slash">//</span>CENTRAL</div>
+  <div class="app">
+  <aside class="side">
+    <div class="brand"><img src="/logo.svg" alt="" />Central de Cortes</div>
+    <button class="btn primary side-new" id="side-new" type="button">＋ Novo vídeo</button>
     <nav class="tabs" role="tablist">
-      <button data-tab="pipeline" class="active">Pipeline</button>
-      <button data-tab="studio">Estúdio <span class="pill" id="pending-count">0</span></button>
-      <button data-tab="channels">Canais</button>
-      <button data-tab="costs">Custos</button>
+      <button data-tab="home" class="active"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg>Início</button>
+      <button data-tab="studio"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>Estúdio <span class="pill" id="pending-count">0</span></button>
+      <button data-tab="pipeline"><svg viewBox="0 0 24 24"><path d="M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z"/></svg>Fila</button>
+      <button data-tab="channels"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Configurações</button>
+      <button data-tab="costs"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7"/></svg>Custos</button>
     </nav>
-    <span id="worker-status" class="worker off"><i></i>worker</span>
-    <select id="channel-filter" aria-label="Filtrar canal"></select>
-  </header>
+    <div class="side-label">Canais</div>
+    <ul id="side-channels"></ul>
+    <div class="side-foot"><span id="worker-status" class="worker off"><i></i>worker</span></div>
+  </aside>
 
   <main>
-    <!-- PIPELINE -->
-    <section id="tab-pipeline" class="tab active">
-      <form id="new-job" class="new-job">
-        <select name="channel_id" aria-label="Canal" required></select>
-        <select name="template_id" aria-label="Modelo de corte" title="Modelo de corte"></select>
-        <textarea name="source" rows="1" placeholder="URL do YouTube (ou caminho de arquivo no servidor). Várias? Uma por linha." required></textarea>
-        <button class="btn primary" type="submit">Processar</button>
-      </form>
+    <!-- INÍCIO (um por canal) -->
+    <section id="tab-home" class="tab active">
+      <div class="hero">
+        <h1 id="home-hello">Olá</h1>
+        <p class="muted" id="home-sub"></p>
+        <form id="new-job" class="composer">
+          <textarea name="source" rows="1" placeholder="Cole um link do YouTube (vários? um por linha)" required></textarea>
+          <div class="composer-bar">
+            <select name="channel_id" aria-label="Canal" required></select>
+            <select name="template_id" aria-label="Modelo de corte" title="Modelo de corte"></select>
+            <button class="send" type="submit" title="Processar" aria-label="Processar"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+          </div>
+        </form>
+        <div class="stats" id="home-stats"></div>
+      </div>
+      <div id="home-body"></div>
+      <div id="failures"></div>
+    </section>
+
+    <!-- FILA (kanban) -->
+    <section id="tab-pipeline" class="tab">
       <div class="kchips" id="kchips"></div>
       <div class="kanban" id="kanban"></div>
-      <div id="failures"></div>
     </section>
 
     <!-- ESTÚDIO -->
@@ -44,6 +62,7 @@
             <button data-f="PUBLISHED">Publicados</button>
             <button data-f="ALL">Todos</button>
           </div>
+          <div id="studio-batch"></div>
           <ul id="clip-list"></ul>
         </aside>
         <div class="studio-main" id="studio-main">
@@ -74,6 +93,7 @@
       <div id="costs"></div>
     </section>
   </main>
+  </div>
 
   <dialog id="new-channel-dialog">
     <form method="dialog" class="form">

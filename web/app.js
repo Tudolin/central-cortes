@@ -17,7 +17,7 @@ const PLATFORM = { youtube: "▶ YouTube", tiktok: "♪ TikTok" };
 
 let state = { channels: [], jobs: [], clips: [], posts: [], costs: [], daily: [], workers: [], templates: [], assets: [], integrations: {} };
 const ui = {
-  tab: localStorage.getItem("tab") || "pipeline",
+  tab: localStorage.getItem("tab") || "home",
   channel: localStorage.getItem("channel") || "",
   studioFilter: "PENDING_REVIEW",
   clipId: null,
@@ -25,6 +25,7 @@ const ui = {
   pvLayout: "auto",
   kcol: localStorage.getItem("kcol") || "",
   channelId: null,
+  sel: new Set(), // cortes marcados para aprovar em lote
 };
 
 async function api(path, opts = {}) {
@@ -154,6 +155,97 @@ function renderPipeline() {
       : "";
 }
 
+// ---------------- Barra lateral e Início ----------------
+
+const logoOf = (ch) => brandOf(ch).logo?.asset;
+const avatar = (ch) => (logoOf(ch) ? `<img src="/media/asset/${logoOf(ch)}" alt="" />` : `<b>${esc((ch?.name || "?")[0])}</b>`);
+
+function renderSide() {
+  const pend = (id) => state.clips.filter((c) => c.status === "PENDING_REVIEW" && (!id || c.channel_id === id)).length;
+  const row = (id, name, av) => {
+    const n = pend(id);
+    return `<li><button data-channel="${esc(id)}" class="${ui.channel === id ? "active" : ""}"><span class="av">${av}</span><span class="nm">${esc(name)}</span>${n ? `<span class="cnt">${n}</span>` : ""}</button></li>`;
+  };
+  $("#side-channels").innerHTML = state.channels.map((ch) => row(ch.id, ch.name, avatar(ch))).join("")
+    + row("", "Todos os canais", `<b>∗</b>`);
+}
+
+/** Anel de score (estilo "progresso"): verde ≥ 85, âmbar ≥ 70, cinza abaixo. */
+function ring(score) {
+  const r = 15, c = 2 * Math.PI * r, col = score >= 85 ? "#16a34a" : score >= 70 ? "#f59e0b" : "#9ca3af";
+  return `<span class="ring" title="Score viral ${score}"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="${r}" class="rbg"/><circle cx="18" cy="18" r="${r}" stroke="${col}" stroke-dasharray="${(c * score) / 100} ${c}" transform="rotate(-90 18 18)"/></svg><b>${score}</b></span>`;
+}
+
+function tile(c, { select = false, sub = "" } = {}) {
+  const img = c.rendered_at ? `<img src="/media/clip/${c.id}.jpg?v=${encodeURIComponent(c.rendered_at)}" alt="" loading="lazy" />` : `<div class="ph">${c.status === "RENDERING" ? "renderizando…" : ""}</div>`;
+  const on = ui.sel.has(c.id);
+  return `<div class="tile${on ? " on" : ""}" data-clip="${c.id}">
+    <div class="tile-img">${img}${ring(c.score)}
+      ${select ? `<label class="pick" title="Selecionar"><input type="checkbox" data-pick="${c.id}" ${on ? "checked" : ""}></label>` : ""}
+      <span class="dur">${hms(c.end_s - c.start_s).replace(/\.\d$/, "")}</span></div>
+    <div class="tile-t">${esc(c.title)}</div>
+    <div class="tile-m">${sub}${localTag(c)}</div>
+  </div>`;
+}
+
+function renderHome() {
+  const ch = state.channels.find((c) => c.id === ui.channel);
+  const h = new Date().getHours();
+  $("#home-hello").textContent = h < 12 ? "Bom dia" : h < 18 ? "Boa tarde" : "Boa noite";
+  $("#home-sub").textContent = ch ? `${ch.name} · cole um vídeo longo e receba cortes prontos para postar.` : "Todos os canais · cole um vídeo longo e receba cortes prontos para postar.";
+  $("#new-job select[name=channel_id]").hidden = !!ch;
+
+  const jobs = jobsF(), clips = clipsF();
+  const running = jobs.filter((j) => !["DONE", "FAILED"].includes(j.status));
+  const rendering = clips.filter((c) => ["RENDER_QUEUED", "RENDERING"].includes(c.status));
+  const pending = clips.filter((c) => c.status === "PENDING_REVIEW").sort((a, b) => b.score - a.score);
+  const sched = clips.filter((c) => ["SCHEDULED", "PUBLISHING"].includes(c.status)).sort((a, b) => (a.scheduled_at || "").localeCompare(b.scheduled_at || ""));
+  const pub = clips.filter((c) => c.status === "PUBLISHED").sort((a, b) => (b.published_at || "").localeCompare(a.published_at || ""));
+  for (const id of ui.sel) if (!pending.some((c) => c.id === id)) ui.sel.delete(id);
+
+  $("#home-stats").innerHTML = [
+    ["Em andamento", running.length + rendering.length, "pipeline"],
+    ["Para aprovar", pending.length, "studio"],
+    ["Agendados", sched.length, "pipeline"],
+    ["Publicados", pub.length, "pipeline"],
+  ].map(([l, n, tab]) => `<button data-goto="${tab}"><b>${n}</b>${l}</button>`).join("");
+
+  const section = (title, actions, body) => `<section class="hsec"><div class="hsec-h"><h2>${title}</h2><div class="hsec-a">${actions}</div></div>${body}</section>`;
+  let html = "";
+  if (running.length) {
+    html += section("Em andamento", "", `<div class="runs">${running.map((j) => {
+      const p = pct(j.detail);
+      return `<div class="run"><div class="run-t">${esc(j.title || j.source)}</div><div class="run-m muted">${ui.channel ? "" : esc(channelName(j.channel_id)) + " · "}${esc(j.detail || j.status.toLowerCase())}</div><div class="bar"><i style="width:${p ?? (j.status === "QUEUED" ? 0 : 35)}%"></i></div></div>`;
+    }).join("")}</div>`);
+  }
+  html += section(`Para aprovar <span class="muted">${pending.length}</span>`,
+    pending.length ? `<span id="sel-actions" class="hsec-a">${selActions()}</span><button class="btn small primary" data-approve-all>Aprovar todos (${pending.length})</button>` : "",
+    pending.length ? `<div class="grid">${pending.map((c) => tile(c, { select: true, sub: ui.channel ? "" : `<span class="tag">${esc(channelName(c.channel_id))}</span>` })).join("")}</div>`
+      : `<p class="empty">Nenhum corte esperando revisão.${rendering.length ? ` ${rendering.length} renderizando.` : ""}</p>`);
+  if (sched.length) html += section("Próximos posts", `<button class="btn small" data-goto="pipeline">Ver agenda</button>`,
+    `<div class="grid">${sched.slice(0, 6).map((c) => tile(c, { sub: `<span class="when">${c.status === "PUBLISHING" ? "publicando…" : when(c.scheduled_at)}${c.schedule_locked ? " 🔒" : ""}</span>` })).join("")}</div>`);
+  if (pub.length) html += section("Publicados recentemente", "",
+    `<div class="grid">${pub.slice(0, 6).map((c) => tile(c, { sub: postsOf(c.id).map((p) => `<span class="tag ${p.status === "FAILED" ? "bad" : ""}">${PLATFORM[p.platform]}</span>`).join("") })).join("")}</div>`);
+  $("#home-body").innerHTML = html;
+}
+
+function selActions() {
+  const n = ui.sel.size;
+  return n
+    ? `<button class="btn small" data-sel-clear>Limpar seleção</button><button class="btn small ok" data-approve-sel>Aprovar ${n} selecionado${n > 1 ? "s" : ""}</button>`
+    : `<button class="btn small" data-sel-all>Selecionar todos</button>`;
+}
+
+async function approveMany(ids) {
+  if (!ids.length) return;
+  if (!confirm(`Aprovar ${ids.length} corte${ids.length > 1 ? "s" : ""}? Cada um vai para o próximo horário livre do canal.`)) return;
+  const r = await api("/api/clips/approve-many", { method: "POST", body: { ids } });
+  ui.sel.clear();
+  if (r.failed.length) toast(`${r.approved} aprovado(s); ${r.failed.length} não: ${r.failed[0].error}`, true);
+  else toast(`${r.approved} corte(s) aprovado(s) e agendado(s)`);
+  await refresh();
+}
+
 function renderWorkers() {
   const online = state.workers.filter((w) => Date.now() - Date.parse(w.last_seen) < 120_000);
   const el = $("#worker-status");
@@ -184,6 +276,9 @@ function renderClipList() {
       ${c.rendered_at ? `<img src="/media/clip/${c.id}.jpg?v=${encodeURIComponent(c.rendered_at)}" alt="" loading="lazy" />` : `<img alt="" />`}
       <div><div class="t">${esc(c.title)}</div><div class="meta muted" style="font-size:12px;margin-top:4px"><span class="score">${c.score}</span> ${hms(c.end_s - c.start_s)} · ${c.status === "SCHEDULED" ? "🗓 " + when(c.scheduled_at) : esc(c.status)}</div></div>
     </li>`).join("") || `<p class="empty">Nada aqui.</p>`;
+  const nPend = clipsF().filter((c) => c.status === "PENDING_REVIEW").length;
+  $("#studio-batch").innerHTML = ui.studioFilter === "PENDING_REVIEW" && nPend > 1
+    ? `<div class="studio-batch"><button class="btn small primary" data-approve-all>Aprovar todos (${nPend})</button></div>` : "";
   const pending = state.clips.filter((c) => c.status === "PENDING_REVIEW").length;
   const pill = $("#pending-count");
   pill.textContent = pending;
@@ -1312,16 +1407,15 @@ function render() {
   localStorage.setItem("tab", ui.tab);
 
   const opts = state.channels.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
-  const filter = $("#channel-filter");
-  filter.innerHTML = `<option value="">Todos os canais</option>${opts}`;
-  filter.value = ui.channel;
   const jobSel = $("#new-job select[name=channel_id]");
   const prev = jobSel.value;
   jobSel.innerHTML = opts;
-  jobSel.value = prev || ui.channel || state.channels[0]?.id || "";
+  jobSel.value = ui.channel || prev || state.channels[0]?.id || "";
   fillTemplateSelect();
 
+  renderSide();
   renderWorkers();
+  renderHome();
   renderPipeline();
   renderClipList();
   $(".studio").classList.toggle("open", !!(ui.clipId && studioCtx));
@@ -1346,10 +1440,33 @@ $(".tabs").addEventListener("click", (e) => {
   ui.tab = b.dataset.tab;
   render();
 });
-$("#channel-filter").addEventListener("change", (e) => {
-  ui.channel = e.target.value;
+$("#side-channels").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-channel]");
+  if (!b) return;
+  ui.channel = b.dataset.channel;
   localStorage.setItem("channel", ui.channel);
+  ui.sel.clear();
+  if (!["home", "studio", "pipeline", "costs"].includes(ui.tab)) ui.tab = "home";
   render();
+});
+$("#side-new").addEventListener("click", () => {
+  ui.tab = "home";
+  render();
+  $("#new-job textarea").focus();
+});
+$("#new-job textarea").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.target.value.includes("\n") && e.target.value.trim()) {
+    e.preventDefault();
+    e.target.form.requestSubmit();
+  }
+});
+$("#tab-home").addEventListener("change", (e) => {
+  const id = +e.target.dataset.pick;
+  if (!id) return;
+  if (e.target.checked) ui.sel.add(id);
+  else ui.sel.delete(id);
+  e.target.closest(".tile").classList.toggle("on", e.target.checked); // sem redesenhar a grade (as miniaturas piscariam)
+  $("#sel-actions").innerHTML = selActions();
 });
 $("#new-job select[name=channel_id]").addEventListener("change", fillTemplateSelect);
 $("#new-job").addEventListener("submit", act(async (e) => {
@@ -1361,8 +1478,23 @@ $("#new-job").addEventListener("submit", act(async (e) => {
 }));
 document.addEventListener("click", act(async (e) => {
   const t = e.target;
+  if (t.closest(".pick")) return; // checkbox de seleção, tratado no change
+  if (t.closest("[data-goto]")) {
+    ui.tab = t.closest("[data-goto]").dataset.goto;
+    return render();
+  }
+  if (t.closest("[data-approve-all]")) return approveMany(clipsF().filter((c) => c.status === "PENDING_REVIEW").map((c) => c.id));
+  if (t.closest("[data-approve-sel]")) return approveMany([...ui.sel]);
+  if (t.closest("[data-sel-all]")) {
+    clipsF().filter((c) => c.status === "PENDING_REVIEW").forEach((c) => ui.sel.add(c.id));
+    return renderHome();
+  }
+  if (t.closest("[data-sel-clear]")) {
+    ui.sel.clear();
+    return renderHome();
+  }
   const card = t.closest("[data-clip]");
-  if (card && (card.closest("#kanban") || card.closest("#clip-list"))) return openClip(+card.dataset.clip);
+  if (card && (card.closest("#kanban") || card.closest("#clip-list") || card.closest("#home-body"))) return openClip(+card.dataset.clip);
   if (t.dataset.clipOpen) return openClip(+t.dataset.clipOpen);
   if (t.dataset.retry) await api(`/api/jobs/${t.dataset.retry}/retry`, { method: "POST" });
   if (t.dataset.del && confirm("Excluir o job e todos os arquivos dele?")) await api(`/api/jobs/${t.dataset.del}`, { method: "DELETE" });

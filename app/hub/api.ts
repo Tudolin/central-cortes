@@ -237,6 +237,23 @@ route("POST", "/api/clips/:id/approve", async (_q, _r, [id], body?: { when?: str
   }
 });
 
+/** Aprova vários cortes de uma vez, cada um no próximo horário livre (maior score primeiro = horário mais cedo). */
+route("POST", "/api/clips/approve-many", async (_q, _r, _p, body?: { ids?: number[] }) => {
+  const clips = (body?.ids ?? []).map((id) => getClip(+id)).filter((c) => c?.status === "PENDING_REVIEW") as Clip[];
+  clips.sort((a, b) => b.score - a.score);
+  const failed: { id: number; error: string }[] = [];
+  let approved = 0;
+  for (const c of clips) {
+    try {
+      await approve(c.id);
+      approved++;
+    } catch (e) {
+      failed.push({ id: c.id, error: (e as Error).message });
+    }
+  }
+  return { approved, failed };
+});
+
 /** Dados da conta do TikTok para o painel de publicação (consultados ao vivo a cada abertura). */
 route("GET", "/api/clips/:id/tiktok", async (_q, _r, [id]) => {
   const clip = must(getClip(+id), "Corte");
