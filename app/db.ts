@@ -341,6 +341,13 @@ if (!get("SELECT 1 FROM channels LIMIT 1")) {
 }
 
 addColumns("templates", { zoom_every: "REAL NOT NULL DEFAULT 0" });
+// Histórico das métricas (uma linha por post a cada coleta): permite comparar cortes na mesma idade (ex.: 48 h).
+db.exec(`CREATE TABLE IF NOT EXISTS post_snapshots (
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  at TEXT NOT NULL,
+  views INTEGER NOT NULL, likes INTEGER NOT NULL, comments INTEGER NOT NULL, shares INTEGER NOT NULL, saves INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS post_snapshots_post ON post_snapshots (post_id, at);`);
 // Desempenho de cada post (YouTube pela API, TikTok pelo robô no TikTok Studio).
 addColumns("posts", {
   views: "INTEGER NOT NULL DEFAULT 0",

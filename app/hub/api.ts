@@ -37,7 +37,11 @@ route("GET", "/api/state", () => {
     `SELECT c.*, j.channel_id, j.title AS video_title FROM clips c JOIN jobs j ON j.id = c.job_id
      WHERE c.status != 'REJECTED' ORDER BY c.id DESC LIMIT 500`,
   );
-  const posts = all(`SELECT clip_id, platform, status, url, error, views, likes, comments, shares, saves, metrics_at FROM posts WHERE clip_id IN (SELECT id FROM clips ORDER BY id DESC LIMIT 500)`);
+  const posts = all(`SELECT p.clip_id, p.platform, p.status, p.url, p.error, p.views, p.likes, p.comments, p.shares, p.saves, p.metrics_at,
+      (SELECT s.views FROM post_snapshots s WHERE s.post_id = p.id
+         AND julianday(s.at) - julianday(c.published_at) BETWEEN 1.5 AND 2.5
+       ORDER BY abs(julianday(s.at) - julianday(c.published_at) - 2) LIMIT 1) AS views48
+    FROM posts p JOIN clips c ON c.id = p.clip_id WHERE p.clip_id IN (SELECT id FROM clips ORDER BY id DESC LIMIT 500)`);
   const costs = all(
     `SELECT channel_id, COUNT(*) AS jobs, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out,
             SUM(tokens_cache_read) AS tokens_cache_read, SUM(tokens_cache_write) AS tokens_cache_write, SUM(cost_usd) AS cost_usd,
@@ -273,6 +277,14 @@ route("GET", "/api/clips/:id/tiktok", async (_q, _r, [id]) => {
   } catch (e) {
     return { required: true, error: explainTikTokError((e as Error).message), saved };
   }
+});
+
+/** Redistribui os agendados (não travados) do canal nos próximos horários livres. */
+route("POST", "/api/channels/:id/rebalance", (_q, _r, [id]) => {
+  must(getChannel(id), "Canal");
+  rebalance(id);
+  bus.emit("change", { table: "clips" });
+  return { ok: true };
 });
 
 route("POST", "/api/clips/:id/unschedule", (_q, _r, [id]) => {

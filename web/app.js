@@ -206,7 +206,7 @@ function renderHome() {
   $("#home-stats").innerHTML = [
     ["Em andamento", running.length + rendering.length, "pipeline"],
     ["Para aprovar", pending.length, "studio"],
-    ["Agendados", sched.length, "pipeline"],
+    ["Agendados", sched.length, "agenda"],
     ["Publicados", pub.length, "pipeline"],
   ].map(([l, n, tab]) => `<button data-goto="${tab}"><b>${n}</b>${l}</button>`).join("");
 
@@ -222,7 +222,7 @@ function renderHome() {
     pending.length ? `<span id="sel-actions" class="hsec-a">${selActions()}</span><button class="btn small primary" data-approve-all>Aprovar todos (${pending.length})</button>` : "",
     pending.length ? `<div class="grid">${pending.map((c) => tile(c, { select: true, sub: ui.channel ? "" : `<span class="tag">${esc(channelName(c.channel_id))}</span>` })).join("")}</div>`
       : `<p class="empty">Nenhum corte esperando revisão.${rendering.length ? ` ${rendering.length} renderizando.` : ""}</p>`);
-  if (sched.length) html += section("Próximos posts", `<button class="btn small" data-goto="pipeline">Ver agenda</button>`,
+  if (sched.length) html += section("Próximos posts", `<button class="btn small" data-goto="agenda">Ver agenda</button>`,
     `<div class="grid">${sched.slice(0, 6).map((c) => tile(c, { sub: `<span class="when">${c.status === "PUBLISHING" ? "publicando…" : when(c.scheduled_at)}${c.schedule_locked ? " 🔒" : ""}</span>` })).join("")}</div>`);
   if (pub.length) html += section("Publicados recentemente", "",
     `<div class="grid">${pub.slice(0, 6).map((c) => tile(c, { sub: postsOf(c.id).map((p) => `<span class="tag ${p.status === "FAILED" ? "bad" : ""}">${PLATFORM[p.platform]}</span>`).join("") })).join("")}</div>`);
@@ -1431,41 +1431,249 @@ function render() {
   }
   if (ui.tab === "costs") renderCosts();
   if (ui.tab === "perf") renderPerf();
+  if (ui.tab === "agenda") renderAgenda();
+}
+
+// ---------------- Agenda (calendário) ----------------
+
+const CH_COLORS = ["#2563eb", "#db2777", "#0d9488", "#f59e0b", "#7c3aed"];
+const chColor = (id) => CH_COLORS[Math.max(0, state.channels.findIndex((c) => c.id === id)) % CH_COLORS.length];
+const DOW = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const pad2 = (n) => String(n).padStart(2, "0");
+const dayKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const hhmm = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+const startOfWeek = (d) => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); // semana começa na segunda
+  return x;
+};
+const addDays = (d, n) => {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+};
+const localInput = (d) => `${dayKey(d)}T${hhmm(d)}`;
+
+ui.cal = { view: localStorage.getItem("calView") || "week", anchor: new Date() };
+
+/** Itens da agenda: agendados (movíveis) e publicados (histórico, fixos). */
+function calItems() {
+  return clipsF().flatMap((c) => {
+    const at = c.status === "PUBLISHED" ? c.published_at : ["SCHEDULED", "PUBLISHING", "PUBLISH_FAILED"].includes(c.status) ? c.scheduled_at : null;
+    if (!at) return [];
+    const views = postsOf(c.id).reduce((a, p) => a + (p.views || 0), 0);
+    return [{ c, at: new Date(at), movable: c.status === "SCHEDULED" || c.status === "PUBLISH_FAILED", views }];
+  });
+}
+
+function evChip(it, compact = false) {
+  const { c } = it;
+  const cls = c.status === "PUBLISHED" ? "done" : c.status === "PUBLISH_FAILED" ? "bad" : c.status === "PUBLISHING" ? "busy" : "";
+  return `<div class="ev ${cls}" data-ev="${c.id}" ${it.movable ? 'draggable="true"' : ""} style="--c:${chColor(c.channel_id)}" title="${esc(c.title)}${!ui.channel ? " · " + esc(channelName(c.channel_id)) : ""}">
+    ${!compact && c.rendered_at ? `<img src="/media/clip/${c.id}.jpg?v=${encodeURIComponent(c.rendered_at)}" alt="" loading="lazy">` : ""}
+    <span class="ev-b">${compact
+      ? `<span class="ev-n"><b>${hhmm(it.at)}${c.schedule_locked && it.movable ? "🔒" : ""}</b>${esc(c.title)}</span>`
+      : `<span class="ev-t">${hhmm(it.at)}${c.schedule_locked && it.movable ? " 🔒" : ""}${c.status === "PUBLISHED" && it.views ? ` · ${kfmt(it.views)} views` : ""}</span><span class="ev-n">${esc(c.title)}</span>`}</span>
+  </div>`;
+}
+
+function renderAgenda() {
+  const { view } = ui.cal;
+  const items = calItems();
+  const now = new Date();
+  const slots = ui.channel ? (state.channels.find((c) => c.id === ui.channel)?.schedule_slots || "").split(/[,\s]+/).filter(Boolean) : [];
+  let label, body;
+
+  if (view === "week") {
+    const start = startOfWeek(ui.cal.anchor);
+    const days = [...Array(7)].map((_, i) => addDays(start, i));
+    const end = addDays(start, 7);
+    const inWeek = items.filter((it) => it.at >= start && it.at < end);
+    const h0 = Math.min(6, ...inWeek.map((it) => it.at.getHours()));
+    label = `${days[0].toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })} – ${days[6].toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })}`;
+    const byCell = new Map();
+    for (const it of inWeek) {
+      const k = `${dayKey(it.at)}|${it.at.getHours() * 60 + (it.at.getMinutes() >= 30 ? 30 : 0)}`;
+      byCell.set(k, [...(byCell.get(k) ?? []), it]);
+    }
+    let cells = `<div class="wk-h"></div>` + days.map((d) => `<div class="wk-h ${dayKey(d) === dayKey(now) ? "today" : ""}">${DOW[d.getDay()]} <b>${d.getDate()}</b></div>`).join("");
+    for (let m = h0 * 60; m < 24 * 60; m += 30) {
+      cells += `<div class="wk-t">${m % 60 ? "" : pad2(m / 60) + ":00"}</div>`;
+      for (const d of days) {
+        const t = new Date(d);
+        t.setHours(0, m, 0, 0);
+        const its = (byCell.get(`${dayKey(d)}|${m}`) ?? []).sort((a, b) => a.at - b.at);
+        const slot = slots.includes(`${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`);
+        cells += `<div class="wk-c ${m % 60 ? "half" : ""} ${t < now ? "past" : ""} ${slot ? "slot" : ""}" data-drop="${t.toISOString()}">${its.map((it) => evChip(it)).join("")}</div>`;
+      }
+    }
+    body = `<div class="wk-wrap"><div class="wk">${cells}</div></div>`;
+  } else {
+    const first = new Date(ui.cal.anchor.getFullYear(), ui.cal.anchor.getMonth(), 1);
+    const start = startOfWeek(first);
+    label = first.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+    const byDay = new Map();
+    for (const it of items) byDay.set(dayKey(it.at), [...(byDay.get(dayKey(it.at)) ?? []), it]);
+    let cells = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"].map((d) => `<div class="mo-h">${d}</div>`).join("");
+    for (let i = 0; i < 42; i++) {
+      const d = addDays(start, i);
+      const its = (byDay.get(dayKey(d)) ?? []).sort((a, b) => a.at - b.at);
+      const endOfDay = addDays(d, 1);
+      cells += `<div class="mo-c ${d.getMonth() !== first.getMonth() ? "out" : ""} ${dayKey(d) === dayKey(now) ? "today" : ""} ${endOfDay < now ? "past" : ""}" data-drop-day="${dayKey(d)}">
+        <span class="mo-d">${d.getDate()}</span>${its.slice(0, 4).map((it) => evChip(it, true)).join("")}${its.length > 4 ? `<button class="mo-more" data-cal-day="${dayKey(d)}">+${its.length - 4}</button>` : ""}</div>`;
+    }
+    body = `<div class="mo">${cells}</div>`;
+  }
+
+  const upcoming = items.filter((it) => it.movable && it.at >= now).sort((a, b) => a.at - b.at);
+  const last = upcoming.at(-1);
+  $("#agenda").innerHTML = `
+    <div class="cal-bar">
+      <div class="cal-nav"><button class="btn small" data-cal="prev" aria-label="Anterior">‹</button><button class="btn small" data-cal="today">Hoje</button><button class="btn small" data-cal="next" aria-label="Próximo">›</button></div>
+      <h1>${esc(label)}</h1>
+      <div class="seg cal-view"><button data-cal-view="week" class="${view === "week" ? "active" : ""}">Semana</button><button data-cal-view="month" class="${view === "month" ? "active" : ""}">Mês</button></div>
+      ${ui.channel ? `<button class="btn small" data-cal-rebalance title="Reorganiza nos horários do canal os cortes que não foram movidos à mão (🔒 ficam onde estão)">Redistribuir</button>` : ""}
+    </div>
+    <p class="muted cal-sub">${upcoming.length} agendado${upcoming.length === 1 ? "" : "s"}${last ? ` · fila até ${last.at.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}` : ""} · arraste um corte para outro horário ou clique nele para ajustar.${ui.channel ? " As faixas marcadas são os horários do canal." : ""}</p>
+    ${!ui.channel ? `<div class="cal-legend">${state.channels.map((c) => `<span><i style="background:${chColor(c.id)}"></i>${esc(c.name)}</span>`).join("")}</div>` : ""}
+    ${body}`;
+}
+
+function openEvDialog(id) {
+  const c = state.clips.find((x) => x.id === id);
+  if (!c) return;
+  const at = new Date(c.status === "PUBLISHED" ? c.published_at : c.scheduled_at);
+  const movable = ["SCHEDULED", "PUBLISH_FAILED"].includes(c.status);
+  const dlg = $("#ev-dialog");
+  dlg.innerHTML = `<form method="dialog" class="ev-dlg">
+    <div class="ev-dlg-top">${c.rendered_at ? `<img src="/media/clip/${c.id}.jpg?v=${encodeURIComponent(c.rendered_at)}" alt="">` : ""}
+      <div><b>${esc(c.title)}</b><div class="muted" style="font-size:12px;margin-top:4px">${esc(channelName(c.channel_id))} · ${c.status === "PUBLISHED" ? "publicado " + when(c.published_at) : when(c.scheduled_at)}${c.schedule_locked ? " · 🔒 horário fixado à mão" : ""}</div>
+      ${c.error && movable ? `<div class="err" style="margin-top:6px;font-size:12px;color:var(--red)">${esc(c.error)}</div>` : ""}</div></div>
+    ${movable ? `<label>Horário <input type="datetime-local" name="at" value="${localInput(at)}" step="300"></label>` : ""}
+    <div class="actions">
+      ${movable ? `<button class="btn primary" value="save" data-ev-act="save" data-id="${c.id}">Salvar horário</button>` : ""}
+      ${movable && c.schedule_locked ? `<button class="btn" data-ev-act="auto" data-id="${c.id}" title="Volta para a fila automática nos horários do canal">Horário automático</button>` : ""}
+      ${movable ? `<button class="btn" data-ev-act="now" data-id="${c.id}">Publicar agora</button>` : ""}
+      <button class="btn" data-ev-act="open" data-id="${c.id}">Abrir no Estúdio</button>
+      ${movable ? `<button class="btn danger" data-ev-act="unschedule" data-id="${c.id}">Tirar da agenda</button>` : ""}
+      <button class="btn" value="cancel" formnovalidate>Fechar</button>
+    </div></form>`;
+  dlg.showModal();
+}
+
+async function moveClip(id, at) {
+  if (at.getTime() < Date.now() + 5 * 60_000) throw new Error("Escolha um horário no futuro");
+  await api(`/api/clips/${id}/approve`, { method: "POST", body: { when: at.toISOString() } });
+  toast(`Movido para ${when(at.toISOString())} 🔒`);
+  await refresh();
 }
 
 // ---------------- Desempenho ----------------
 
-const kfmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1).replace(".", ",") + " mi" : n >= 1e4 ? Math.round(n / 1e3) + " mil" : fmtN(n));
+const kfmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1).replace(".", ",") + " mi" : n >= 1e4 ? Math.round(n / 1e3) + " mil" : fmtN(Math.round(n)));
+const median = (a) => {
+  const s = [...a].sort((x, y) => x - y);
+  return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : 0;
+};
+ui.perfPlat = "all";
 
-/** Cortes publicados do filtro atual com as métricas somadas por plataforma. */
+/** Cortes publicados do filtro atual com as métricas da plataforma escolhida. */
 function perfRows() {
+  const plat = ui.perfPlat === "all" ? null : ui.perfPlat;
   return clipsF().filter((c) => c.status === "PUBLISHED").map((c) => {
-    const ps = postsOf(c.id).filter((p) => p.metrics_at);
-    const sum = (k, plat) => ps.filter((p) => !plat || p.platform === plat).reduce((a, p) => a + (p[k] || 0), 0);
+    const ps = postsOf(c.id).filter((p) => p.metrics_at && (!plat || p.platform === plat));
+    const sum = (k, pl) => ps.filter((p) => !pl || p.platform === pl).reduce((a, p) => a + (p[k] || 0), 0);
     const views = sum("views");
+    const job = state.jobs.find((j) => j.id === c.job_id);
     return {
-      c, measured: ps.length > 0, views, yt: sum("views", "youtube"), tt: sum("views", "tiktok"),
+      c, job, measured: ps.length > 0, views, yt: sum("views", "youtube"), tt: sum("views", "tiktok"),
+      v48: ps.length && ps.every((p) => p.views48 != null) ? ps.reduce((a, p) => a + p.views48, 0) : null,
       likes: sum("likes"), comments: sum("comments"), shares: sum("shares"), saves: sum("saves"),
       eng: views ? (sum("likes") + sum("comments") + sum("shares")) / views : 0,
+      age: (Date.now() - Date.parse(c.published_at || 0)) / 86400_000,
     };
   });
 }
 
-/** Barras horizontais: média de views por grupo (pilar, horário…). */
-function avgBars(rows, keyOf, labelOf = (k) => k) {
-  const g = new Map();
-  for (const r of rows) {
-    const k = keyOf(r);
-    if (k === "" || k == null) continue;
-    const a = g.get(k) ?? { n: 0, v: 0 };
-    a.n++; a.v += r.views; g.set(k, a);
-  }
-  const list = [...g].map(([k, a]) => ({ k, n: a.n, avg: a.v / a.n })).sort((a, b) => b.avg - a.avg);
-  const max = Math.max(1, ...list.map((x) => x.avg));
-  return list.length
-    ? `<div class="hbars">${list.map((x) => `<div class="hbar"><span class="hl">${esc(labelOf(x.k))}</span><span class="ht"><i style="width:${(x.avg / max) * 100}%"></i></span><b>${kfmt(Math.round(x.avg))}</b><span class="muted">${x.n} corte${x.n > 1 ? "s" : ""}</span></div>`).join("")}</div>`
-    : `<p class="muted">Sem dados ainda.</p>`;
+const LAYOUT_PT = { single_speaker: "1 pessoa", split_screen: "tela dividida", screen_share_focus: "tela/slide" };
+const durBucket = (d) => (d < 30 ? "até 30s" : d < 45 ? "30–45s" : d < 60 ? "45–60s" : d < 75 ? "60–75s" : "75s+");
+
+/** Fatores avaliados: [nome, função que dá o grupo do corte, tipo]. */
+const FACTORS = [
+  ["Dia da semana", (r) => DOW[new Date(r.c.published_at).getDay()], "quando"],
+  ["Horário", (r) => pad2(new Date(r.c.published_at).getHours()) + "h", "quando"],
+  ["Período do dia", (r) => { const h = new Date(r.c.published_at).getHours(); return h < 6 ? "madrugada" : h < 12 ? "manhã" : h < 18 ? "tarde" : "noite"; }, "quando"],
+  ["Pilar", (r) => r.c.pillar, "conteúdo"],
+  ["Modelo de corte", (r) => state.templates.find((t) => t.id === r.job?.template_id)?.name ?? "", "conteúdo"],
+  ["Vídeo de origem", (r) => r.job?.uploader || "", "conteúdo"],
+  ["Duração", (r) => durBucket(r.c.end_s - r.c.start_s), "formato"],
+  ["Layout", (r) => LAYOUT_PT[r.c.layout_used || r.c.layout] ?? "", "formato"],
+  ["Tamanho do título", (r) => (r.c.title.length < 40 ? "curto (<40)" : r.c.title.length <= 60 ? "médio (40–60)" : "longo (60+)"), "formato"],
+  ["Falante identificado", (r) => (r.c.speaker_name ? "sim" : "não"), "formato"],
+  ["Teaser no início", (r) => (r.c.teaser_end > r.c.teaser_start ? "sim" : "não"), "formato"],
+  ["Score da IA", (r) => (r.c.score >= 90 ? "90+" : r.c.score >= 80 ? "80–89" : "até 79"), "IA"],
+];
+
+/**
+ * Quanto cada fator explica da variação das views (ε², sobre log das views: um viral não domina tudo).
+ * ε² desconta o acaso de ter muitos grupos pequenos; 0 = não explica nada.
+ */
+function factorEffects(rows, val) {
+  const ys = rows.map((r) => Math.log10(1 + val(r)));
+  return FACTORS.map(([name, keyOf, kind]) => {
+    const groups = new Map();
+    rows.forEach((r, i) => {
+      const k = keyOf(r);
+      if (k === "" || k == null) return;
+      const g = groups.get(k) ?? { ys: [], vs: [] };
+      g.ys.push(ys[i]); g.vs.push(val(r)); groups.set(k, g);
+    });
+    const list = [...groups].map(([k, g]) => ({ k, n: g.ys.length, med: median(g.vs), mean: g.ys.reduce((a, b) => a + b, 0) / g.ys.length }))
+      .sort((a, b) => b.med - a.med);
+    const all = [...groups.values()].flatMap((g) => g.ys);
+    const N = all.length, k = list.length;
+    let eff = 0;
+    if (k >= 2 && N > k && list.filter((g) => g.n >= 2).length >= 2) {
+      const mu = all.reduce((a, b) => a + b, 0) / N;
+      const sst = all.reduce((a, y) => a + (y - mu) ** 2, 0);
+      const ssb = list.reduce((a, g) => a + g.n * (g.mean - mu) ** 2, 0);
+      const msw = (sst - ssb) / (N - k);
+      eff = sst ? Math.max(0, (ssb - (k - 1) * msw) / sst) : 0;
+    }
+    return { name, kind, groups: list, eff, n: N, ok: k >= 2 && list.filter((g) => g.n >= 2).length >= 2 };
+  }).sort((a, b) => b.eff - a.eff || (b.ok ? 1 : 0) - (a.ok ? 1 : 0));
 }
+
+function groupBars(groups) {
+  const max = Math.max(1, ...groups.map((g) => g.med));
+  return `<div class="hbars">${groups.map((g, i) => `<div class="hbar ${i === 0 && groups.length > 1 ? "best" : ""}"><span class="hl" title="${esc(g.k)}">${esc(g.k)}</span><span class="ht"><i style="width:${(g.med / max) * 100}%"></i></span><b>${kfmt(g.med)}</b><span class="muted">${g.n} corte${g.n > 1 ? "s" : ""}</span></div>`).join("")}</div>`;
+}
+
+function heatmap(rows, val) {
+  const hours = [...new Set(rows.map((r) => new Date(r.c.published_at).getHours()))].sort((a, b) => a - b);
+  if (!hours.length) return "";
+  const cell = new Map();
+  for (const r of rows) {
+    const d = new Date(r.c.published_at);
+    const k = `${(d.getDay() + 6) % 7}|${d.getHours()}`;
+    cell.set(k, [...(cell.get(k) ?? []), val(r)]);
+  }
+  const meds = [...cell.values()].map(median);
+  const max = Math.max(1, ...meds);
+  const days = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
+  return `<div class="heat" style="grid-template-columns: 44px repeat(${hours.length}, minmax(44px, 1fr))">
+    <span></span>${hours.map((h) => `<span class="heat-h">${pad2(h)}h</span>`).join("")}
+    ${days.map((d, di) => `<span class="heat-d">${d}</span>${hours.map((h) => {
+      const vs = cell.get(`${di}|${h}`);
+      if (!vs) return `<span class="heat-c empty"></span>`;
+      const m = median(vs);
+      return `<span class="heat-c" style="--a:${0.12 + 0.88 * Math.sqrt(m / max)}" title="${d} ${pad2(h)}h — mediana ${fmtN(Math.round(m))} views em ${vs.length} corte(s)">${kfmt(m)}<small>${vs.length}</small></span>`;
+    }).join("")}`).join("")}
+  </div>`;
+}
+
+const strength = (e) => (e >= 0.25 ? "forte" : e >= 0.1 ? "moderado" : e > 0.02 ? "fraco" : "nenhum claro");
 
 function renderPerf() {
   const rows = perfRows();
@@ -1476,14 +1684,28 @@ function renderPerf() {
   const errs = Object.entries(ms.errors || {}).filter(([k]) => !ui.channel || k.startsWith(ui.channel + ":"));
   const ch = state.channels.find((c) => c.id === ui.channel);
 
+  // Base da comparação: só cortes com 48 h+ (os novos ainda estão crescendo). Com histórico suficiente,
+  // usa as views de cada corte aos 48 h, que é a comparação mais justa.
+  const sample = m.filter((r) => r.age >= 2);
+  const use48 = sample.length >= 6 && sample.filter((r) => r.v48 != null).length / sample.length >= 0.8;
+  const base = use48 ? sample.filter((r) => r.v48 != null) : sample;
+  const val = use48 ? (r) => r.v48 : (r) => r.views;
+  const effects = base.length >= 4 ? factorEffects(base, val) : [];
+  const ranked = effects.filter((f) => f.ok);
+  const insights = ranked.filter((f) => f.eff > 0.02).slice(0, 3).map((f) => {
+    const best = f.groups[0], worst = f.groups.at(-1);
+    return `<li><b>${esc(f.name)}</b> pesa ${strength(f.eff)} (explica ~${Math.round(f.eff * 100)}% da variação): melhor <b>${esc(best.k)}</b> (mediana ${kfmt(best.med)}, ${best.n} corte${best.n > 1 ? "s" : ""}), pior <b>${esc(worst.k)}</b> (${kfmt(worst.med)}, ${worst.n}).</li>`;
+  });
+  // Sugestão de horários: os 3 melhores horários com 2+ cortes.
+  const hourF = effects.find((f) => f.name === "Horário");
+  const bestHours = hourF ? hourF.groups.filter((g) => g.n >= 2).slice(0, 3).map((g) => g.k) : [];
+
   const tiles = [
     ["Views", kfmt(views), `YouTube ${kfmt(tot("yt"))} · TikTok ${kfmt(tot("tt"))}`],
-    ["Média por corte", kfmt(m.length ? Math.round(views / m.length) : 0), `${m.length} de ${rows.length} publicados medidos`],
-    ["Curtidas", kfmt(tot("likes")), `${kfmt(tot("comments"))} comentários`],
-    ["Engajamento", views ? ((tot("likes") + tot("comments") + tot("shares")) / views * 100).toFixed(1).replace(".", ",") + "%" : "—", "curtidas + comentários + compartilhamentos ÷ views"],
+    ["Mediana por corte", kfmt(median(m.map((r) => r.views))), `média ${kfmt(m.length ? views / m.length : 0)} · ${m.length} de ${rows.length} medidos`],
+    ["Curtidas", kfmt(tot("likes")), `${kfmt(tot("comments"))} comentários · ${kfmt(tot("shares"))} compart.`],
+    ["Engajamento", views ? ((tot("likes") + tot("comments") + tot("shares")) / views * 100).toFixed(1).replace(".", ",") + "%" : "—", "curtidas + comentários + compart. ÷ views"],
   ];
-
-  // Linha do tempo: views de cada corte pela data de publicação (últimos 40).
   const timeline = [...m].sort((a, b) => (a.c.published_at || "").localeCompare(b.c.published_at || "")).slice(-40);
   const tmax = Math.max(1, ...timeline.map((r) => r.views));
   const top = [...m].sort((a, b) => b.views - a.views);
@@ -1491,24 +1713,34 @@ function renderPerf() {
   $("#perf").innerHTML = `
     <div class="perf-h">
       <div><h1>Desempenho</h1><p class="muted">${ch ? esc(ch.name) : "Todos os canais"} · ${ms.running ? "atualizando…" : ms.at ? "atualizado " + when(ms.at) : "ainda não coletado"}</p></div>
-      <button class="btn" data-metrics-refresh ${ms.running ? "disabled" : ""}>Atualizar agora</button>
+      <div class="perf-tools">
+        <div class="seg">${[["all", "Total"], ["youtube", "YouTube"], ["tiktok", "TikTok"]].map(([k, l]) => `<button data-perf-plat="${k}" class="${ui.perfPlat === k ? "active" : ""}">${l}</button>`).join("")}</div>
+        <button class="btn" data-metrics-refresh ${ms.running ? "disabled" : ""}>Atualizar agora</button>
+      </div>
     </div>
     ${errs.length ? `<div class="card perf-err">${errs.map(([k, v]) => `<div><b>${esc(k.replace(":", " · "))}</b>: ${esc(v)}</div>`).join("")}</div>` : ""}
     <div class="kpis">${tiles.map(([l, v, s]) => `<div class="kpi"><span>${l}</span><b>${v}</b><small class="muted">${s}</small></div>`).join("")}</div>
+
+    <section class="card perf-card insight">
+      <h3>O que mais faz diferença</h3>
+      ${base.length < 4 ? `<p class="muted">Ainda poucos cortes com 48 h ou mais de publicados (${base.length}). A análise aparece a partir de 4.</p>` : `
+      <p class="muted small">Comparando ${use48 ? "as views de cada corte aos 48 h de publicado" : "as views totais dos cortes com 48 h ou mais"} (${base.length} cortes${ui.perfPlat !== "all" ? ", só " + (ui.perfPlat === "youtube" ? "YouTube" : "TikTok") : ""}). Medianas, para um viral não distorcer.${base.length < 20 ? " <b>Amostra pequena: trate como pista, não como conclusão.</b>" : ""}</p>
+      ${insights.length ? `<ul class="ins">${insights.join("")}</ul>` : `<p>Nenhum fator se destaca ainda: as diferenças entre grupos estão dentro do que o acaso explica.</p>`}
+      ${bestHours.length ? `<p class="small">Horários com melhor mediana: <b>${bestHours.join(", ")}</b>${ch ? ` · horários atuais do canal: ${esc(ch.schedule_slots)}` : ""}.</p>` : ""}
+      <div class="fx">${ranked.map((f) => `<div class="fx-r"><span>${esc(f.name)} <small class="muted">${f.kind}</small></span><span class="ht"><i style="width:${Math.min(100, f.eff * 200)}%"></i></span><b>${f.eff > 0.02 ? Math.round(f.eff * 100) + "%" : "—"}</b><small class="muted">${strength(f.eff)}</small></div>`).join("")}</div>`}
+    </section>
+
+    ${base.length >= 4 ? `<section class="card perf-card"><h3>Dia × horário <span class="muted">mediana de views (número pequeno = cortes)</span></h3>${heatmap(base, val)}</section>
+    <div class="perf-2">${effects.filter((f) => f.groups.length >= 2).map((f) => `<section class="card perf-card"><h3>${esc(f.name)} <span class="muted">${f.ok && f.eff > 0.02 ? "pesa " + strength(f.eff) : "sem efeito claro"}</span></h3>${groupBars(f.groups)}</section>`).join("")}</div>` : ""}
+
     ${timeline.length ? `<section class="card perf-card"><h3>Views por corte <span class="muted">por data de publicação</span></h3>
       <div class="vbars">${timeline.map((r) => `<div class="vbar" data-clip="${r.c.id}" title="${esc(r.c.title)} — ${fmtN(r.views)} views (${when(r.c.published_at)})"><i style="height:${Math.max(2, (r.views / tmax) * 100)}%"></i></div>`).join("")}</div></section>` : ""}
-    <div class="perf-2">
-      <section class="card perf-card"><h3>Média por pilar</h3>${avgBars(m, (r) => r.c.pillar)}</section>
-      <section class="card perf-card"><h3>Média por horário de postagem</h3>${avgBars(m, (r) => r.c.published_at ? String(new Date(r.c.published_at).getHours()).padStart(2, "0") + "h" : "")}</section>
-      <section class="card perf-card"><h3>Média por duração</h3>${avgBars(m, (r) => { const d = r.c.end_s - r.c.start_s; return d < 30 ? "até 30s" : d < 45 ? "30–45s" : d < 60 ? "45–60s" : "60s+"; })}</section>
-      <section class="card perf-card"><h3>Score da IA × resultado</h3>${avgBars(m, (r) => r.c.score >= 90 ? "score 90+" : r.c.score >= 80 ? "score 80–89" : "score até 79")}</section>
-    </div>
     <section class="card perf-card"><h3>Ranking</h3>
       ${top.length ? `<div class="table-wrap"><table class="rank"><thead><tr><th></th><th>Corte</th><th>Publicado</th><th class="n">YouTube</th><th class="n">TikTok</th><th class="n">Total</th><th class="n">Curtidas</th><th class="n">Coment.</th><th class="n">Engaj.</th></tr></thead><tbody>
       ${top.map((r, i) => `<tr data-clip="${r.c.id}"><td class="muted">${i + 1}</td><td class="rt">${r.c.rendered_at ? `<img src="/media/clip/${r.c.id}.jpg?v=${encodeURIComponent(r.c.rendered_at)}" alt="" loading="lazy">` : ""}<span>${esc(r.c.title)}${r.c.pillar ? ` <span class="tag">${esc(r.c.pillar)}</span>` : ""}</span></td><td class="muted">${when(r.c.published_at)}</td><td class="n">${fmtN(r.yt)}</td><td class="n">${fmtN(r.tt)}</td><td class="n"><b>${fmtN(r.views)}</b></td><td class="n">${fmtN(r.likes)}</td><td class="n">${fmtN(r.comments)}</td><td class="n">${(r.eng * 100).toFixed(1).replace(".", ",")}%</td></tr>`).join("")}
       </tbody></table></div>` : `<p class="muted">Nenhum corte publicado com métricas ainda. A coleta roda a cada 6 h; clique em Atualizar agora para buscar já.</p>`}
     </section>
-    <p class="muted perf-note">Os cortes que mais e menos renderam (com 48 h ou mais de publicados) entram como referência na análise da IA de cada canal, a partir de 8 cortes medidos.</p>`;
+    <p class="muted perf-note">Os cortes que mais e menos renderam (48 h+) e os padrões de duração e pilar entram como referência na análise da IA de cada canal, a partir de 8 cortes medidos.</p>`;
 }
 
 // ---------------- Eventos ----------------
@@ -1525,9 +1757,70 @@ $("#side-channels").addEventListener("click", (e) => {
   ui.channel = b.dataset.channel;
   localStorage.setItem("channel", ui.channel);
   ui.sel.clear();
-  if (!["home", "studio", "pipeline", "costs", "perf"].includes(ui.tab)) ui.tab = "home";
+  if (!["home", "studio", "pipeline", "costs", "perf", "agenda"].includes(ui.tab)) ui.tab = "home";
   render();
 });
+$("#agenda").addEventListener("dragstart", (e) => {
+  const ev = e.target.closest?.("[data-ev][draggable]");
+  if (!ev) return;
+  e.dataTransfer.setData("text/plain", ev.dataset.ev);
+  e.dataTransfer.effectAllowed = "move";
+  ev.classList.add("dragging");
+});
+$("#agenda").addEventListener("dragend", () => $$("#agenda .dragging, #agenda .over").forEach((x) => x.classList.remove("dragging", "over")));
+$("#agenda").addEventListener("dragover", (e) => {
+  const cell = e.target.closest("[data-drop], [data-drop-day]");
+  if (!cell || cell.classList.contains("past")) return;
+  e.preventDefault();
+  $$("#agenda .over").forEach((x) => x !== cell && x.classList.remove("over"));
+  cell.classList.add("over");
+});
+$("#agenda").addEventListener("drop", act(async (e) => {
+  const cell = e.target.closest("[data-drop], [data-drop-day]");
+  const id = +e.dataTransfer.getData("text/plain");
+  if (!cell || !id) return;
+  e.preventDefault();
+  cell.classList.remove("over");
+  const c = state.clips.find((x) => x.id === id);
+  let at;
+  if (cell.dataset.drop) at = new Date(cell.dataset.drop);
+  else { // mês: mantém a hora, muda o dia
+    const old = new Date(c.scheduled_at);
+    at = new Date(cell.dataset.dropDay + "T00:00");
+    at.setHours(old.getHours(), old.getMinutes(), 0, 0);
+  }
+  if (c.scheduled_at && Date.parse(c.scheduled_at) === at.getTime()) return;
+  await moveClip(id, at);
+}));
+$("#ev-dialog").addEventListener("click", act(async (e) => {
+  const b = e.target.closest("[data-ev-act]");
+  if (!b) return;
+  e.preventDefault();
+  const id = +b.dataset.id, dlg = $("#ev-dialog"), act2 = b.dataset.evAct;
+  if (act2 === "save") {
+    const v = dlg.querySelector("[name=at]").value;
+    if (!v) return;
+    await moveClip(id, new Date(v));
+  } else if (act2 === "auto") {
+    await api(`/api/clips/${id}/approve`, { method: "POST", body: {} });
+    toast("De volta à fila automática");
+    await refresh();
+  } else if (act2 === "now") {
+    if (!confirm("Publicar este corte agora?")) return;
+    await api(`/api/clips/${id}/approve`, { method: "POST", body: { when: "now" } });
+    toast("Publicando…");
+    await refresh();
+  } else if (act2 === "unschedule") {
+    if (!confirm("Tirar da agenda? O corte volta para Pendentes no Estúdio.")) return;
+    await api(`/api/clips/${id}/unschedule`, { method: "POST" });
+    await refresh();
+  } else if (act2 === "open") {
+    dlg.close();
+    return openClip(id);
+  }
+  dlg.close();
+}));
+
 $("#side-new").addEventListener("click", () => {
   ui.tab = "home";
   render();
@@ -1561,6 +1854,34 @@ document.addEventListener("click", act(async (e) => {
   if (t.closest("[data-goto]")) {
     ui.tab = t.closest("[data-goto]").dataset.goto;
     return render();
+  }
+  const calBtn = t.closest("[data-cal]");
+  if (calBtn) {
+    const dir = calBtn.dataset.cal, c = ui.cal;
+    if (dir === "today") c.anchor = new Date();
+    else if (c.view === "week") c.anchor = addDays(c.anchor, dir === "next" ? 7 : -7);
+    else c.anchor = new Date(c.anchor.getFullYear(), c.anchor.getMonth() + (dir === "next" ? 1 : -1), 1);
+    return renderAgenda();
+  }
+  if (t.closest("[data-cal-view]")) {
+    ui.cal.view = t.closest("[data-cal-view]").dataset.calView;
+    localStorage.setItem("calView", ui.cal.view);
+    return renderAgenda();
+  }
+  if (t.closest("[data-cal-day]")) {
+    ui.cal.view = "week";
+    ui.cal.anchor = new Date(t.closest("[data-cal-day]").dataset.calDay + "T12:00");
+    return renderAgenda();
+  }
+  if (t.closest("[data-cal-rebalance]") && confirm("Reorganizar os cortes agendados nos horários do canal? Os que você moveu à mão (🔒) ficam onde estão.")) {
+    await api(`/api/channels/${ui.channel}/rebalance`, { method: "POST" });
+    toast("Agenda reorganizada");
+    return refresh();
+  }
+  if (t.closest("#agenda [data-ev]")) return openEvDialog(+t.closest("[data-ev]").dataset.ev);
+  if (t.closest("[data-perf-plat]")) {
+    ui.perfPlat = t.closest("[data-perf-plat]").dataset.perfPlat;
+    return renderPerf();
   }
   if (t.closest("[data-metrics-refresh]")) {
     t.disabled = true;

@@ -75,6 +75,7 @@ export async function collectMetrics() {
   if (metricsState.running) return metricsState;
   metricsState.running = true;
   const errors: Record<string, string> = {};
+  const started = new Date().toISOString();
   try {
     for (const { id } of all<{ id: string }>("SELECT id FROM channels")) {
       const ch = getChannel(id)!;
@@ -88,6 +89,8 @@ export async function collectMetrics() {
         }
       }
     }
+    run(`INSERT INTO post_snapshots (post_id, at, views, likes, comments, shares, saves)
+         SELECT id, metrics_at, views, likes, comments, shares, saves FROM posts WHERE metrics_at >= ?`, started);
   } finally {
     metricsState.running = false;
     metricsState.at = new Date().toISOString();
@@ -119,11 +122,31 @@ export function performanceNotes(channelId: string): string {
   if (rows.length < 8) return "";
   rows.sort((a, b) => b.views - a.views);
   const n = Math.min(5, Math.floor(rows.length / 3));
+  const median = (a: number[]) => {
+    const s = [...a].sort((x, y) => x - y);
+    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+  };
+  const pattern = (label: string, keyOf: (r: (typeof rows)[number]) => string) => {
+    const g = new Map<string, number[]>();
+    for (const r of rows) {
+      const k = keyOf(r);
+      if (k) g.set(k, [...(g.get(k) ?? []), r.views]);
+    }
+    const list = [...g].filter(([, v]) => v.length >= 3).map(([k, v]) => ({ k, med: median(v), n: v.length })).sort((a, b) => b.med - a.med);
+    if (list.length < 2) return "";
+    return `- ${label}: ${list.map((x) => `${x.k} (mediana ${Math.round(x.med).toLocaleString("pt-BR")} views, ${x.n} cortes)`).join("; ")}`;
+  };
+  const patterns = [
+    pattern("Duração", (r) => (r.dur < 30 ? "até 30s" : r.dur < 45 ? "30–45s" : r.dur < 60 ? "45–60s" : r.dur < 75 ? "60–75s" : "75s+")),
+    pattern("Pilar", (r) => r.pillar),
+  ].filter(Boolean);
   const line = (r: (typeof rows)[number]) =>
     `- "${r.title}" — ${r.views.toLocaleString("pt-BR")} views, ${r.likes} curtidas, ${r.comments} comentários, ${Math.round(r.dur)}s${r.pillar ? `, pilar ${r.pillar}` : ""}. Gancho: ${r.hook}`;
   return `Resultados reais dos cortes já publicados neste canal (views somadas de YouTube e TikTok). Use como referência do que funciona com este público: aprenda o padrão (tipo de gancho, assunto, duração, tom do título), não repita os temas.
 Os que mais renderam:
 ${rows.slice(0, n).map(line).join("\n")}
 Os que menos renderam:
-${rows.slice(-n).map(line).join("\n")}`;
+${rows.slice(-n).map(line).join("\n")}${patterns.length ? `
+Padrões (do melhor para o pior):
+${patterns.join("\n")}` : ""}`;
 }

@@ -44,7 +44,11 @@ export function rebalance(channelId: string) {
     channelId,
   );
   const taken = new Set(scheduled.filter((c) => c.schedule_locked).map((c) => c.scheduled_at));
-  const free = upcomingSlots(ch, new Date()).map((d) => d.toISOString()).filter((s) => !taken.has(s));
+  // Quantos dias de horários forem necessários para todos os aprovados (30 dias não bastavam com fila grande:
+  // o excedente caía no "1 por hora" e saía tudo no mesmo dia).
+  const perDay = Math.max(1, ch.schedule_slots.split(/[,\s]+/).filter((s) => /^\d{1,2}:\d{2}$/.test(s)).length);
+  const days = Math.max(30, Math.ceil(scheduled.length / perDay) + 3);
+  const free = upcomingSlots(ch, new Date(), days).map((d) => d.toISOString()).filter((s) => !taken.has(s));
   const queue = scheduled.filter((c) => !c.schedule_locked).sort((a, b) => b.score - a.score || a.id - b.id);
   queue.forEach((c, i) => {
     const slot = free[i] ?? new Date(Date.now() + (i + 1) * 3600_000).toISOString(); // canal sem horários: 1/h
