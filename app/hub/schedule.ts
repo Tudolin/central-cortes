@@ -177,8 +177,28 @@ function warnMissingFinal(c: Clip) {
   const late = Date.now() - Date.parse(c.scheduled_at ?? "") > 30 * 60_000;
   if (late && !warnedMissing.has(c.id)) {
     warnedMissing.add(c.id);
-    void tg.alert(`⏳ "${c.title}" passou do horário esperando o vídeo final. Ligue o PC com o worker rodando: ele envia e o corte é publicado na hora.`);
+    void tg.alert(`⏳ "${c.title}" passou do horário esperando o vídeo final e foi para o próximo horário livre. Ligue o PC com o worker rodando.`);
   }
+}
+
+/** Aviso antecipado: PC desligado e cortes das próximas 24 h ainda sem vídeo final no notebook. */
+let offlineWarnedAt = 0;
+function warnWorkerOffline() {
+  const w = get<{ last_seen: string }>("SELECT last_seen FROM workers ORDER BY last_seen DESC LIMIT 1");
+  const offlineH = w ? (Date.now() - Date.parse(w.last_seen)) / 3600_000 : Infinity;
+  if (offlineH < 1) {
+    offlineWarnedAt = 0;
+    return;
+  }
+  if (Date.now() - offlineWarnedAt < 12 * 3600_000) return;
+  const soon = all<Clip>("SELECT * FROM clips WHERE status = 'SCHEDULED' AND scheduled_at <= ?", new Date(Date.now() + 24 * 3600_000).toISOString())
+    .filter((c) => !existsSync(clipPath(c.job_id, c.id, "mp4")));
+  if (!soon.length) return;
+  offlineWarnedAt = Date.now();
+  void tg.alert(
+    `🖥️ O worker do PC está sem contato há ${Number.isFinite(offlineH) ? Math.round(offlineH) + " h" : "muito tempo"} e ${soon.length} corte(s) das próximas 24 h ` +
+      "ainda não têm vídeo final no notebook. Ligue o PC para não atrasar as postagens.",
+  );
 }
 
 let busy = false;
@@ -186,6 +206,15 @@ export async function tick() {
   if (busy) return;
   busy = true;
   try {
+    // Corte que perdeu o horário (vídeo final não chegou a tempo) vai para o próximo horário livre,
+    // em vez de vários saírem em rajada quando o PC volta.
+    const stale = all<Clip & { channel_id: string }>(
+      `SELECT c.*, j.channel_id FROM clips c JOIN jobs j ON j.id = c.job_id
+       WHERE c.status = 'SCHEDULED' AND c.schedule_locked = 0 AND c.publish_attempts = 0 AND c.scheduled_at < ?`,
+      new Date(Date.now() - 2 * 3600_000).toISOString(),
+    );
+    for (const ch of new Set(stale.map((c) => c.channel_id))) rebalance(ch);
+    warnWorkerOffline();
     // Um por vez: respeita rate limits das plataformas e o upload lento do notebook.
     const waiting = new Set<number>();
     for (;;) {

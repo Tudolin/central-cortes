@@ -4,7 +4,6 @@ import { all, type Clip } from "../db.ts";
 import { bus } from "../events.ts";
 import { removeClipFiles } from "./media.ts";
 import { tg } from "./telegram.ts";
-import { FINAL_WINDOW_H } from "./workerApi.ts";
 
 /**
  * Proteção de disco do hub (o notebook tem pouco espaço e o SQLite derruba o hub quando o disco enche).
@@ -20,6 +19,12 @@ export const freeGb = () => {
   const s = statfsSync(config.dataDir);
   return (s.bavail * s.bsize) / 1e9;
 };
+
+/**
+ * Por quantas horas à frente o hub guarda os vídeos finais da agenda (~80 MB cada).
+ * Disco folgado: 7 dias, então o PC pode ficar desligado esse tempo sem atrasar nada. Apertado: 36 h.
+ */
+export const finalWindowH = () => (freeGb() > 15 ? 7 * 24 : 36);
 
 export const diskState = () => {
   const free = freeGb();
@@ -41,7 +46,7 @@ function prune() {
     // Proxy só serve para o ajuste fino durante a revisão.
     if (!["PENDING_REVIEW", "RENDER_QUEUED", "RENDERING"].includes(c.status)) removeClipFiles(c.job_id, c.id, ["proxy"]);
     // Vídeo final: só fica no hub perto da hora de publicar (o PC guarda o original e reenvia quando preciso).
-    const far = c.scheduled_at && Date.parse(c.scheduled_at) > Date.now() + (FINAL_WINDOW_H + 12) * 3600_000 && !c.schedule_locked;
+    const far = c.scheduled_at && Date.parse(c.scheduled_at) > Date.now() + (finalWindowH() + 12) * 3600_000 && !c.schedule_locked;
     if (["PENDING_REVIEW", "FAILED"].includes(c.status) || (c.status === "SCHEDULED" && far)) removeClipFiles(c.job_id, c.id, ["mp4"]);
   }
 }

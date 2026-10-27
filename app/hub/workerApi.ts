@@ -8,7 +8,7 @@ import type { CutProposal } from "../pipeline/analyze.ts";
 import { renderCaption } from "../pipeline/caption.ts";
 import { specFor, templateOf } from "./brandApi.ts";
 import { clipPath, transcriptPath, type ClipFile } from "./media.ts";
-import { diskState } from "./disk.ts";
+import { diskState, finalWindowH } from "./disk.ts";
 import { rebalance } from "./schedule.ts";
 import { tg } from "./telegram.ts";
 
@@ -48,16 +48,16 @@ route("POST", "/api/worker/heartbeat", (req, _r, _p, body: { task?: string }) =>
 
 /** Re-render primeiro (alguém está esperando no Estúdio), depois vídeos novos. */
 /**
- * Vídeo final sob demanda: o PC guarda o mp4 de cada corte; o hub só recebe os que serão publicados
- * nas próximas FINAL_WINDOW_H horas (o disco do notebook não comporta a agenda inteira).
+ * Vídeo final sob demanda: o PC guarda o mp4 de cada corte; o hub recebe os que serão publicados
+ * dentro da janela de finalWindowH() — com disco folgado, uma semana de agenda, para o PC poder ficar
+ * desligado por dias sem atrasar postagens.
  */
-export const FINAL_WINDOW_H = 36;
 const finalRequested = new Map<number, number>(); // clipId → quando foi pedido (evita pedir em dobro)
 
 export const hasFinal = (c: Clip) => existsSync(clipPath(c.job_id, c.id, "mp4"));
 
 function nextFinalNeeded(): Clip | undefined {
-  const until = new Date(Date.now() + FINAL_WINDOW_H * 3600_000).toISOString();
+  const until = new Date(Date.now() + finalWindowH() * 3600_000).toISOString();
   const due = all<Clip>(
     `SELECT * FROM clips WHERE status IN ('SCHEDULED','PUBLISHING','PUBLISH_FAILED') AND (scheduled_at IS NULL OR scheduled_at <= ?)
      ORDER BY scheduled_at`,
