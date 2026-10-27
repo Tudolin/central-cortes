@@ -234,7 +234,10 @@ const ollamaUp = () => fetch(`${config.ollamaUrl}/api/version`, { signal: AbortS
 async function ensureOllama() {
   if (await ollamaUp()) return;
   if (!existsSync(config.ollamaBin)) throw new Error(`Ollama não instalado (${config.ollamaBin})`);
-  spawn(config.ollamaBin, ["serve"], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  // Sem detached: o servidor herda o console oculto do worker e os runners que ele abre a cada
+  // modelo carregado também (detached deixa o serve sem console e cada runner pisca uma janela).
+  // Ele morre junto com o worker; o próximo vídeo sobe de novo.
+  spawn(config.ollamaBin, ["serve"], { stdio: "ignore", windowsHide: true }).unref();
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 1000));
     if (await ollamaUp()) return;
