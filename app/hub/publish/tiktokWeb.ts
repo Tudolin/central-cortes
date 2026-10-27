@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
 import { config } from "../../config.ts";
 import type { Channel, Clip } from "../../db.ts";
 import { settings } from "../settings.ts";
@@ -110,12 +110,42 @@ async function needsHumanCheck(page: Page) {
   if (await captcha.first().isVisible().catch(() => false)) throw new NeedsHuman("o TikTok pediu uma verificação (captcha)");
 }
 
-/** Fecha avisos de primeiro uso ("Entendi", "Got it") que cobrem o formulário. */
+/**
+ * Fecha avisos de primeiro uso que cobrem o formulário (contas novas mostram vários, em PT ou EN).
+ * O convite de "verificações automáticas de conteúdo" é fechado em Cancelar: o robô não muda configuração da conta.
+ */
 async function dismissTips(page: Page) {
-  for (const name of [/^Entendi$/, /^Got it$/, /^OK$/]) {
-    const b = page.getByRole("button", { name }).first();
-    if (await b.isVisible().catch(() => false)) await b.click().catch(() => {});
+  for (let round = 0; round < 4; round++) {
+    let hit = false;
+    const checks = page.getByText(/automatic content checks|verifica\S* autom\S* de conte/i).first();
+    if (await checks.isVisible().catch(() => false)) {
+      await page.getByRole("button", { name: /^(Cancel|Cancelar)$/ }).last().click({ timeout: 3000 }).catch(() => {});
+      hit = true;
+    }
+    for (const name of [/^Entendi$/, /^Got it$/, /^OK$/, /^Agora não$/, /^Not now$/]) {
+      const b = page.getByRole("button", { name }).first();
+      if (await b.isVisible().catch(() => false)) {
+        await b.click({ timeout: 3000 }).catch(() => {});
+        hit = true;
+      }
+    }
+    if (!hit) return;
+    await page.waitForTimeout(600);
   }
+}
+
+/** Clica mesmo que um aviso apareça por cima no meio do caminho: fecha os avisos e tenta de novo. */
+async function clickThrough(page: Page, target: Locator, what: string) {
+  for (let i = 0; i < 4; i++) {
+    await dismissTips(page);
+    try {
+      await target.click({ timeout: 8000 });
+      return;
+    } catch {
+      await page.waitForTimeout(1000);
+    }
+  }
+  throw new Error(`não consegui clicar em ${what} (algum aviso do TikTok ficou na frente; veja data/robot/)`);
 }
 
 export async function tiktokWebUpload(ch: Channel, clip: Clip, file: string, opts: { dryRun?: boolean } = {}) {
@@ -144,13 +174,17 @@ export async function tiktokWebUpload(ch: Channel, clip: Clip, file: string, opt
     // A legenda vem preenchida com o nome do arquivo: substitui pela legenda do corte.
     const editor = page.locator('.public-DraftEditor-content[contenteditable="true"]').first();
     await editor.waitFor({ state: "visible", timeout: 120_000 });
-    await dismissTips(page);
-    await editor.click();
+    await page.waitForTimeout(1500); // os avisos de primeiro uso surgem logo depois do upload começar
+    await clickThrough(page, editor, "a legenda");
     await page.keyboard.press("Control+A");
     await page.keyboard.press("Delete");
     await page.keyboard.insertText(clip.caption.slice(0, 4000));
     await page.keyboard.press("Escape"); // fecha sugestão de hashtag/menção, se abrir
     await dismissTips(page);
+    // Nunca publica com a legenda errada (ex.: o nome do arquivo que o Studio coloca sozinho).
+    const typed = (await editor.innerText()).replace(/\s+/g, " ");
+    const expected = clip.caption.slice(0, 40).replace(/\s+/g, " ").trim();
+    if (!typed.includes(expected.slice(0, 25))) throw new Error("a legenda não entrou no campo do TikTok");
 
     // Espera o upload terminar ("Enviado") antes de publicar.
     await page
@@ -163,7 +197,7 @@ export async function tiktokWebUpload(ch: Channel, clip: Clip, file: string, opt
     const visibility = page.locator('[data-e2e="video_visibility_container"]');
     if (await visibility.isVisible().catch(() => false)) {
       if (!/\b(Everyone|Todos)\b/.test(await visibility.innerText())) {
-        await visibility.locator("button").first().click();
+        await clickThrough(page, visibility.locator("button").first(), "a visibilidade");
         await page.getByRole("option", { name: /^(Everyone|Todos)$/ }).first().click({ timeout: 10_000 });
       }
     }
@@ -173,14 +207,14 @@ export async function tiktokWebUpload(ch: Channel, clip: Clip, file: string, opt
     if (opts.dryRun) {
       // Teste: tudo pronto para publicar; descarta em vez de postar.
       const caption = await editor.innerText();
-      await page.locator('[data-e2e="discard_post_button"]').click();
+      await clickThrough(page, page.locator('[data-e2e="discard_post_button"]'), "Descartar");
       await page.getByRole("button", { name: /^(Descartar|Discard)$/ }).last().click({ timeout: 10_000 });
       return { status: "OK" as const, external_id: "dry-run", url: "", caption };
     }
     for (let i = 0; i < 60 && ((await post.isDisabled()) || (await post.getAttribute("aria-disabled")) === "true"); i++) {
       await page.waitForTimeout(2000);
     }
-    await post.click();
+    await clickThrough(page, post, "Publicar");
 
     // Às vezes o TikTok confirma antes ("Publicar agora" enquanto a verificação de conteúdo roda).
     const confirm = page.getByRole("button", { name: /^(Publicar agora|Post now)$/ }).first();
