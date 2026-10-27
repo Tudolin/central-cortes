@@ -1,4 +1,5 @@
 import { createWriteStream, existsSync, renameSync } from "node:fs";
+import { performanceNotes } from "./metrics.ts";
 import type { IncomingMessage } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { all, get, getChannel, getClip, getJob, run, updateClip, updateJob, type Clip, type Job } from "../db.ts";
@@ -88,7 +89,7 @@ route("POST", "/api/worker/claim", (req) => {
   if (job) {
     updateJob(job.id, { status: "DOWNLOADING", worker, error: "", detail: "" });
     const hasClips = !!get("SELECT 1 FROM clips WHERE job_id = ?", job.id);
-    return { type: "job", job: getJob(job.id), channel: getChannel(job.channel_id), hasClips, template: templateOf(job.template_id, job.channel_id).tpl ?? null };
+    return { type: "job", job: getJob(job.id), channel: { ...getChannel(job.channel_id)!, performance: performanceNotes(job.channel_id) }, hasClips, template: templateOf(job.template_id, job.channel_id).tpl ?? null };
   }
   return { type: "idle" };
 }, "worker");

@@ -341,6 +341,15 @@ if (!get("SELECT 1 FROM channels LIMIT 1")) {
 }
 
 addColumns("templates", { zoom_every: "REAL NOT NULL DEFAULT 0" });
+// Desempenho de cada post (YouTube pela API, TikTok pelo robô no TikTok Studio).
+addColumns("posts", {
+  views: "INTEGER NOT NULL DEFAULT 0",
+  likes: "INTEGER NOT NULL DEFAULT 0",
+  comments: "INTEGER NOT NULL DEFAULT 0",
+  shares: "INTEGER NOT NULL DEFAULT 0",
+  saves: "INTEGER NOT NULL DEFAULT 0",
+  metrics_at: "TEXT NOT NULL DEFAULT ''",
+});
 
 /** Todo canal começa com os modelos padrão (Podcast vira o padrão). */
 export function ensureTemplates(channelId: string) {

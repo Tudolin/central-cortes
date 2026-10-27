@@ -156,6 +156,65 @@ export async function youtubeLoginOpen() {
   }
 }
 
+export interface TikTokItem {
+  item_id: string;
+  desc: string;
+  create_time: number;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  saves: number;
+}
+
+/**
+ * Lê as publicações da conta do canal no TikTok Studio (aba Publicações) com a sessão do robô.
+ * Não clica em nada: abre a lista e guarda o JSON que a própria página busca (item_list),
+ * rolando para carregar mais páginas (50 por página).
+ */
+export async function tiktokStudioItems(channelId: string, maxPages = 6): Promise<TikTokItem[]> {
+  if (!existsSync(sessionPath(channelId))) throw new Error("canal sem login no robô do TikTok");
+  const browser = await connect();
+  const context = await browser.newContext({ storageState: sessionPath(channelId), viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  const items = new Map<string, TikTokItem>();
+  let hasMore = true, pages = 0;
+  page.on("response", async (r) => {
+    if (!r.url().includes("/creator/manage/item_list/")) return;
+    try {
+      const j = (await r.json()) as { has_more?: boolean; item_list?: Record<string, string>[] };
+      pages++;
+      hasMore = !!j.has_more;
+      for (const it of j.item_list ?? []) {
+        items.set(it.item_id, {
+          item_id: it.item_id, desc: it.desc ?? "", create_time: +it.create_time,
+          views: +it.play_count || 0, likes: +it.like_count || 0, comments: +it.comment_count || 0,
+          shares: +it.share_count || 0, saves: +it.favorite_count || 0,
+        });
+      }
+    } catch {}
+  });
+  try {
+    await page.goto("https://www.tiktok.com/tiktokstudio/content", { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(6000);
+    await needsHumanCheck(page);
+    for (let i = 0; i < maxPages && hasMore; i++) {
+      const before = pages;
+      await page.mouse.move(640, 600);
+      await page.mouse.wheel(0, 6000);
+      await page.waitForTimeout(3000);
+      if (pages === before) break;
+    }
+    if (!pages) throw new Error("o TikTok Studio não carregou a lista de publicações");
+    await context.storageState({ path: sessionPath(channelId) }).catch(() => {});
+    return [...items.values()];
+  } finally {
+    await page.close().catch(() => {});
+    await context.close().catch(() => {});
+    await browser.close().catch(() => {});
+  }
+}
+
 export function robotLogout(channelId: string) {
   rmSync(sessionPath(channelId), { force: true });
 }

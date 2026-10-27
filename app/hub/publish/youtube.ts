@@ -38,6 +38,24 @@ export async function youtubeConnect(channelId: string, code: string) {
   setCredentials(channelId, { youtube_refresh_token: t.refresh_token, youtube_account: me.items?.[0]?.snippet.title ?? "conectado" });
 }
 
+/** Visualizações, curtidas e comentários dos vídeos do canal (até 50 IDs por chamada). */
+export async function youtubeStats(ch: Channel, ids: string[]) {
+  const refresh = credentialsOf(ch).youtube_refresh_token;
+  if (!refresh) throw new Error("YouTube não conectado neste canal");
+  const { access_token } = await tokenRequest({ refresh_token: refresh, grant_type: "refresh_token" });
+  const out = new Map<string, { views: number; likes: number; comments: number }>();
+  for (let i = 0; i < ids.length; i += 50) {
+    const q = new URLSearchParams({ part: "statistics", id: ids.slice(i, i + 50).join(","), maxResults: "50" });
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/videos?${q}`, { headers: { authorization: `Bearer ${access_token}` } });
+    const data = (await r.json()) as { items?: { id: string; statistics: Record<string, string> }[]; error?: { message: string } };
+    if (!r.ok) throw new Error(`YouTube stats ${r.status}: ${data.error?.message ?? ""}`);
+    for (const it of data.items ?? []) {
+      out.set(it.id, { views: +(it.statistics.viewCount ?? 0), likes: +(it.statistics.likeCount ?? 0), comments: +(it.statistics.commentCount ?? 0) });
+    }
+  }
+  return out;
+}
+
 /** Upload resumable (2 requisições): metadados → bytes do vídeo. */
 export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
   const refresh = credentialsOf(ch).youtube_refresh_token;

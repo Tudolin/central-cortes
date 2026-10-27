@@ -12,6 +12,7 @@ import { clipPath, jobMediaDir, transcriptPath } from "./media.ts";
 import { explainTikTokError, tiktokAuthUrl, tiktokConnect, tiktokCreatorInfo, tiktokRedirect, type TikTokPostSettings } from "./publish/tiktok.ts";
 import { youtubeAuthUrl, youtubeConnect, youtubeRedirect } from "./publish/youtube.ts";
 import { approve, needsTikTokChoices, rebalance, reject } from "./schedule.ts";
+import { collectMetrics, metricsState } from "./metrics.ts";
 import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
 import { chatCandidates, telegramBotInfo, telegramTest, tg } from "./telegram.ts";
 import { diskState } from "./disk.ts";
@@ -36,7 +37,7 @@ route("GET", "/api/state", () => {
     `SELECT c.*, j.channel_id, j.title AS video_title FROM clips c JOIN jobs j ON j.id = c.job_id
      WHERE c.status != 'REJECTED' ORDER BY c.id DESC LIMIT 500`,
   );
-  const posts = all(`SELECT clip_id, platform, status, url, error FROM posts WHERE clip_id IN (SELECT id FROM clips ORDER BY id DESC LIMIT 500)`);
+  const posts = all(`SELECT clip_id, platform, status, url, error, views, likes, comments, shares, saves, metrics_at FROM posts WHERE clip_id IN (SELECT id FROM clips ORDER BY id DESC LIMIT 500)`);
   const costs = all(
     `SELECT channel_id, COUNT(*) AS jobs, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out,
             SUM(tokens_cache_read) AS tokens_cache_read, SUM(tokens_cache_write) AS tokens_cache_write, SUM(cost_usd) AS cost_usd,
@@ -58,7 +59,7 @@ route("GET", "/api/state", () => {
     timezone: config.timezone,
     robotScreen: robotScreenUrl(),
   };
-  return { channels, jobs, clips, posts, costs, daily, workers, templates, assets, integrations, disk: diskState() };
+  return { channels, jobs, clips, posts, costs, daily, workers, templates, assets, integrations, disk: diskState(), metrics: metricsState };
 });
 
 // ---------- Integrações (chaves de app e bot), editáveis pelo dashboard ----------
@@ -235,6 +236,12 @@ route("POST", "/api/clips/:id/approve", async (_q, _r, [id], body?: { when?: str
   } catch (e) {
     throw new HttpError(409, (e as Error).message);
   }
+});
+
+/** Coleta agora as métricas de YouTube e TikTok (o robô leva ~20 s por canal). */
+route("POST", "/api/metrics/refresh", async () => {
+  const s = await collectMetrics();
+  return { at: s.at, errors: s.errors };
 });
 
 /** Aprova vários cortes de uma vez, cada um no próximo horário livre (maior score primeiro = horário mais cedo). */

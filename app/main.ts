@@ -10,12 +10,14 @@ if (config.role === "hub" || config.role === "all") {
   const { startScheduler } = await import("./hub/schedule.ts");
   const { startTelegram } = await import("./hub/telegram.ts");
   const { startDiskGuard } = await import("./hub/disk.ts");
+  const { startMetrics } = await import("./hub/metrics.ts");
   startServer();
   // HUB_PASSIVE=1: só serve o painel (prévia local com cópia do banco; nunca publica nada).
   if (process.env.HUB_PASSIVE !== "1") {
     startReaper();
     startScheduler();
     startDiskGuard();
+    startMetrics();
     void startTelegram();
   }
 }

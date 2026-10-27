@@ -17,6 +17,7 @@
     <nav class="tabs" role="tablist">
       <button data-tab="home" class="active"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg>Início</button>
       <button data-tab="studio"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>Estúdio <span class="pill" id="pending-count">0</span></button>
+      <button data-tab="perf"><svg viewBox="0 0 24 24"><path d="M4 19h16M6 16l4-5 3 3 5-7"/></svg>Desempenho</button>
       <button data-tab="pipeline"><svg viewBox="0 0 24 24"><path d="M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z"/></svg>Fila</button>
       <button data-tab="channels"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Configurações</button>
       <button data-tab="costs"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7"/></svg>Custos</button>
@@ -45,6 +46,9 @@
       <div id="home-body"></div>
       <div id="failures"></div>
     </section>
+
+    <!-- DESEMPENHO -->
+    <section id="tab-perf" class="tab"><div id="perf"></div></section>
 
     <!-- FILA (kanban) -->
     <section id="tab-pipeline" class="tab">

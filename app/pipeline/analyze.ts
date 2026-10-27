@@ -100,7 +100,11 @@ Nicho / posicionamento: ${ch.niche}
 Tom de voz: ${ch.tone}
 ${ch.extra_instructions ? `Instruções adicionais: ${ch.extra_instructions}` : ""}
 </canal>
-${tpl ? `
+${(ch as Channel & { performance?: string }).performance ? `
+<desempenho>
+${(ch as Channel & { performance?: string }).performance}
+</desempenho>
+` : ""}${tpl ? `
 <formato nome="${tpl.name}">
 ${tpl.instructions}
 </formato>

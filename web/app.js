@@ -1430,6 +1430,85 @@ function render() {
     loadSettings().catch((e) => toast(e.message, true));
   }
   if (ui.tab === "costs") renderCosts();
+  if (ui.tab === "perf") renderPerf();
+}
+
+// ---------------- Desempenho ----------------
+
+const kfmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1).replace(".", ",") + " mi" : n >= 1e4 ? Math.round(n / 1e3) + " mil" : fmtN(n));
+
+/** Cortes publicados do filtro atual com as métricas somadas por plataforma. */
+function perfRows() {
+  return clipsF().filter((c) => c.status === "PUBLISHED").map((c) => {
+    const ps = postsOf(c.id).filter((p) => p.metrics_at);
+    const sum = (k, plat) => ps.filter((p) => !plat || p.platform === plat).reduce((a, p) => a + (p[k] || 0), 0);
+    const views = sum("views");
+    return {
+      c, measured: ps.length > 0, views, yt: sum("views", "youtube"), tt: sum("views", "tiktok"),
+      likes: sum("likes"), comments: sum("comments"), shares: sum("shares"), saves: sum("saves"),
+      eng: views ? (sum("likes") + sum("comments") + sum("shares")) / views : 0,
+    };
+  });
+}
+
+/** Barras horizontais: média de views por grupo (pilar, horário…). */
+function avgBars(rows, keyOf, labelOf = (k) => k) {
+  const g = new Map();
+  for (const r of rows) {
+    const k = keyOf(r);
+    if (k === "" || k == null) continue;
+    const a = g.get(k) ?? { n: 0, v: 0 };
+    a.n++; a.v += r.views; g.set(k, a);
+  }
+  const list = [...g].map(([k, a]) => ({ k, n: a.n, avg: a.v / a.n })).sort((a, b) => b.avg - a.avg);
+  const max = Math.max(1, ...list.map((x) => x.avg));
+  return list.length
+    ? `<div class="hbars">${list.map((x) => `<div class="hbar"><span class="hl">${esc(labelOf(x.k))}</span><span class="ht"><i style="width:${(x.avg / max) * 100}%"></i></span><b>${kfmt(Math.round(x.avg))}</b><span class="muted">${x.n} corte${x.n > 1 ? "s" : ""}</span></div>`).join("")}</div>`
+    : `<p class="muted">Sem dados ainda.</p>`;
+}
+
+function renderPerf() {
+  const rows = perfRows();
+  const m = rows.filter((r) => r.measured);
+  const tot = (k) => m.reduce((a, r) => a + r[k], 0);
+  const views = tot("views");
+  const ms = state.metrics || {};
+  const errs = Object.entries(ms.errors || {}).filter(([k]) => !ui.channel || k.startsWith(ui.channel + ":"));
+  const ch = state.channels.find((c) => c.id === ui.channel);
+
+  const tiles = [
+    ["Views", kfmt(views), `YouTube ${kfmt(tot("yt"))} · TikTok ${kfmt(tot("tt"))}`],
+    ["Média por corte", kfmt(m.length ? Math.round(views / m.length) : 0), `${m.length} de ${rows.length} publicados medidos`],
+    ["Curtidas", kfmt(tot("likes")), `${kfmt(tot("comments"))} comentários`],
+    ["Engajamento", views ? ((tot("likes") + tot("comments") + tot("shares")) / views * 100).toFixed(1).replace(".", ",") + "%" : "—", "curtidas + comentários + compartilhamentos ÷ views"],
+  ];
+
+  // Linha do tempo: views de cada corte pela data de publicação (últimos 40).
+  const timeline = [...m].sort((a, b) => (a.c.published_at || "").localeCompare(b.c.published_at || "")).slice(-40);
+  const tmax = Math.max(1, ...timeline.map((r) => r.views));
+  const top = [...m].sort((a, b) => b.views - a.views);
+
+  $("#perf").innerHTML = `
+    <div class="perf-h">
+      <div><h1>Desempenho</h1><p class="muted">${ch ? esc(ch.name) : "Todos os canais"} · ${ms.running ? "atualizando…" : ms.at ? "atualizado " + when(ms.at) : "ainda não coletado"}</p></div>
+      <button class="btn" data-metrics-refresh ${ms.running ? "disabled" : ""}>Atualizar agora</button>
+    </div>
+    ${errs.length ? `<div class="card perf-err">${errs.map(([k, v]) => `<div><b>${esc(k.replace(":", " · "))}</b>: ${esc(v)}</div>`).join("")}</div>` : ""}
+    <div class="kpis">${tiles.map(([l, v, s]) => `<div class="kpi"><span>${l}</span><b>${v}</b><small class="muted">${s}</small></div>`).join("")}</div>
+    ${timeline.length ? `<section class="card perf-card"><h3>Views por corte <span class="muted">por data de publicação</span></h3>
+      <div class="vbars">${timeline.map((r) => `<div class="vbar" data-clip="${r.c.id}" title="${esc(r.c.title)} — ${fmtN(r.views)} views (${when(r.c.published_at)})"><i style="height:${Math.max(2, (r.views / tmax) * 100)}%"></i></div>`).join("")}</div></section>` : ""}
+    <div class="perf-2">
+      <section class="card perf-card"><h3>Média por pilar</h3>${avgBars(m, (r) => r.c.pillar)}</section>
+      <section class="card perf-card"><h3>Média por horário de postagem</h3>${avgBars(m, (r) => r.c.published_at ? String(new Date(r.c.published_at).getHours()).padStart(2, "0") + "h" : "")}</section>
+      <section class="card perf-card"><h3>Média por duração</h3>${avgBars(m, (r) => { const d = r.c.end_s - r.c.start_s; return d < 30 ? "até 30s" : d < 45 ? "30–45s" : d < 60 ? "45–60s" : "60s+"; })}</section>
+      <section class="card perf-card"><h3>Score da IA × resultado</h3>${avgBars(m, (r) => r.c.score >= 90 ? "score 90+" : r.c.score >= 80 ? "score 80–89" : "score até 79")}</section>
+    </div>
+    <section class="card perf-card"><h3>Ranking</h3>
+      ${top.length ? `<div class="table-wrap"><table class="rank"><thead><tr><th></th><th>Corte</th><th>Publicado</th><th class="n">YouTube</th><th class="n">TikTok</th><th class="n">Total</th><th class="n">Curtidas</th><th class="n">Coment.</th><th class="n">Engaj.</th></tr></thead><tbody>
+      ${top.map((r, i) => `<tr data-clip="${r.c.id}"><td class="muted">${i + 1}</td><td class="rt">${r.c.rendered_at ? `<img src="/media/clip/${r.c.id}.jpg?v=${encodeURIComponent(r.c.rendered_at)}" alt="" loading="lazy">` : ""}<span>${esc(r.c.title)}${r.c.pillar ? ` <span class="tag">${esc(r.c.pillar)}</span>` : ""}</span></td><td class="muted">${when(r.c.published_at)}</td><td class="n">${fmtN(r.yt)}</td><td class="n">${fmtN(r.tt)}</td><td class="n"><b>${fmtN(r.views)}</b></td><td class="n">${fmtN(r.likes)}</td><td class="n">${fmtN(r.comments)}</td><td class="n">${(r.eng * 100).toFixed(1).replace(".", ",")}%</td></tr>`).join("")}
+      </tbody></table></div>` : `<p class="muted">Nenhum corte publicado com métricas ainda. A coleta roda a cada 6 h; clique em Atualizar agora para buscar já.</p>`}
+    </section>
+    <p class="muted perf-note">Os cortes que mais e menos renderam (com 48 h ou mais de publicados) entram como referência na análise da IA de cada canal, a partir de 8 cortes medidos.</p>`;
 }
 
 // ---------------- Eventos ----------------
@@ -1446,7 +1525,7 @@ $("#side-channels").addEventListener("click", (e) => {
   ui.channel = b.dataset.channel;
   localStorage.setItem("channel", ui.channel);
   ui.sel.clear();
-  if (!["home", "studio", "pipeline", "costs"].includes(ui.tab)) ui.tab = "home";
+  if (!["home", "studio", "pipeline", "costs", "perf"].includes(ui.tab)) ui.tab = "home";
   render();
 });
 $("#side-new").addEventListener("click", () => {
@@ -1483,6 +1562,13 @@ document.addEventListener("click", act(async (e) => {
     ui.tab = t.closest("[data-goto]").dataset.goto;
     return render();
   }
+  if (t.closest("[data-metrics-refresh]")) {
+    t.disabled = true;
+    toast("Buscando números no YouTube e no TikTok (o robô leva ~20 s por canal)…");
+    const r = await api("/api/metrics/refresh", { method: "POST" });
+    toast(Object.keys(r.errors).length ? `Atualizado com avisos: ${Object.values(r.errors)[0]}` : "Métricas atualizadas", !!Object.keys(r.errors).length);
+    return refresh();
+  }
   if (t.closest("[data-approve-all]")) return approveMany(clipsF().filter((c) => c.status === "PENDING_REVIEW").map((c) => c.id));
   if (t.closest("[data-approve-sel]")) return approveMany([...ui.sel]);
   if (t.closest("[data-sel-all]")) {
@@ -1494,7 +1580,7 @@ document.addEventListener("click", act(async (e) => {
     return renderHome();
   }
   const card = t.closest("[data-clip]");
-  if (card && (card.closest("#kanban") || card.closest("#clip-list") || card.closest("#home-body"))) return openClip(+card.dataset.clip);
+  if (card && (card.closest("#kanban") || card.closest("#clip-list") || card.closest("#home-body") || card.closest("#perf"))) return openClip(+card.dataset.clip);
   if (t.dataset.clipOpen) return openClip(+t.dataset.clipOpen);
   if (t.dataset.retry) await api(`/api/jobs/${t.dataset.retry}/retry`, { method: "POST" });
   if (t.dataset.del && confirm("Excluir o job e todos os arquivos dele?")) await api(`/api/jobs/${t.dataset.del}`, { method: "DELETE" });
