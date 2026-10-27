@@ -689,6 +689,30 @@ const GUIDES = {
   ],
 };
 
+/** Robô do TikTok (modo Navegador): login próprio de cada canal, feito pela tela remota. */
+function robotBlock(ch) {
+  const r = ch.robot ?? {};
+  const screen = esc(state.integrations.robotScreen);
+  const status = r.pending
+    ? `<span class="tt-hint">Janela de login aberta: entre na conta de ${esc(ch.name)} na <a href="${screen}" target="_blank" rel="noopener">tela remota do robô</a> e clique em Concluir.</span>`
+    : r.saved
+      ? `<span class="ok-dot">login salvo em ${when(r.saved)}${ch.tiktok_mode === "browser" ? " · publicando pelo robô" : " · modo atual não é o robô"}</span>`
+      : `<span class="muted">sem login neste canal</span>`;
+  return `<div class="robot-box">
+    <div class="integ-head"><b>🤖 Robô do TikTok</b> ${status}</div>
+    <div class="muted help">Publica direto pelo TikTok Studio, sem app aprovado. Cada canal tem a própria sessão; o robô nunca mistura contas.</div>
+    <div class="actions">
+      ${r.pending
+        ? `<a class="btn small" href="${screen}" target="_blank" rel="noopener">Abrir tela remota</a>
+           <button class="btn small primary" type="button" data-robot="finish">Concluir login</button>
+           <button class="btn small" type="button" data-robot="cancel">Cancelar</button>`
+        : `<button class="btn small primary" type="button" data-robot="login">${r.saved ? "Refazer login" : "Entrar no TikTok pelo robô"}</button>
+           ${r.saved ? "" : `<button class="btn small" type="button" data-robot="adopt-main" title="Para quem já fez login na janela principal da tela remota">Usar a conta da janela principal</button>`}
+           ${r.saved ? `<button class="btn small danger" type="button" data-robot="logout">Sair</button>` : ""}`}
+    </div>
+  </div>`;
+}
+
 const copyField = (value) =>
   `<div class="copy-row"><input readonly value="${esc(value)}"><button class="btn small" type="button" data-copy="${esc(value)}">Copiar</button></div>`;
 
@@ -707,9 +731,7 @@ function renderIntegrations() {
       <div class="integ-head"><b>${PLATFORM[p]}</b>
         ${ch ? (acct ? `<span class="ok-dot">${esc(ch.name)}: ${esc(acct)}</span>` : `<span class="muted">${esc(ch.name)}: não conectado</span>`) : ""}</div>
       <div class="muted help">${help}</div>
-      ${p === "tiktok" && ch?.tiktok_mode === "browser"
-        ? `<div class="conn"><span>🤖 Modo navegador: o robô publica pelo TikTok Studio com a conta logada na <a href="${esc(state.integrations.robotScreen)}" target="_blank" rel="noopener">tela remota do robô</a> (faça login lá uma vez).</span></div>`
-        : ""}
+      ${p === "tiktok" && ch ? robotBlock(ch) : ""}
       ${guide(p, GUIDES[p](redirects?.[p]))}
       ${settingField(keys[0], p === "youtube" ? "Client ID" : "Client key")}
       ${settingField(keys[1], "Client secret", { secret: true })}
@@ -1324,6 +1346,21 @@ document.addEventListener("click", act(async (e) => {
   if (t.dataset.del && confirm("Excluir o job e todos os arquivos dele?")) await api(`/api/jobs/${t.dataset.del}`, { method: "DELETE" });
   if (t.dataset.rerender) await api(`/api/clips/${t.dataset.rerender}/rerender`, { method: "POST" });
   if (t.dataset.republish) await api(`/api/clips/${t.dataset.republish}/approve`, { method: "POST", body: { when: "now" } });
+  if (t.dataset.robot) {
+    const action = t.dataset.robot;
+    if (action === "logout" && !confirm("Apagar o login do robô deste canal? Os posts pelo robô param até entrar de novo.")) return;
+    if (action === "adopt-main" && !confirm("Salvar como deste canal a conta do TikTok que está logada na janela principal da tela remota?")) return;
+    t.disabled = true;
+    t.blur(); // o cartão não se redesenha enquanto o foco está nele
+    const r = await api(`/api/channels/${encodeURIComponent(ui.channelId)}/robot/${action}`, { method: "POST" }).finally(() => (t.disabled = false));
+    if (action === "login") {
+      window.open(r.screen, "_blank", "noopener");
+      toast("Janela de login aberta na tela remota do robô — entre na conta e depois clique em Concluir login");
+    }
+    if (action === "finish" || action === "adopt-main") toast("Login do robô salvo — este canal agora publica no TikTok pelo robô");
+    await loadSettings();
+    await refresh();
+  }
   if (t.dataset.disconnect && confirm("Desconectar esta conta do canal?")) {
     await api(`/api/channels/${encodeURIComponent(ui.channelId)}/disconnect/${t.dataset.disconnect}`, { method: "POST" });
     $("#channel-form").dataset.for = "-";

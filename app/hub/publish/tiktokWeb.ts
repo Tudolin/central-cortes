@@ -1,6 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { config } from "../../config.ts";
 import type { Channel, Clip } from "../../db.ts";
 import { settings } from "../settings.ts";
@@ -8,7 +8,11 @@ import { tg } from "../telegram.ts";
 
 /**
  * Modo "Navegador": publica pelo TikTok Studio na web, controlando o Chromium do container cortes-browser
- * (mesma rede do hub, CDP em 127.0.0.1:9222). Usa a sessão logada no perfil do robô.
+ * (mesma rede do hub, CDP em 127.0.0.1:9222).
+ *
+ * Cada canal tem a própria sessão do TikTok: o login é feito numa janela isolada do robô e os cookies
+ * ficam salvos em data/robot/tiktok-<canal>.json. Cada post abre uma janela isolada com essa sessão,
+ * então dois canais nunca se misturam no mesmo navegador.
  *
  * Não contorna detecção de robô: se o TikTok pedir login ou verificação, o post falha, o hub tenta de novo
  * mais tarde e o Telegram avisa para resolver na tela remota.
@@ -20,6 +24,85 @@ const UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?from=webapp";
 export const robotScreenUrl = () => process.env.ROBOT_SCREEN_URL || settings.publicUrl.replace(/:\d+$/, "") + ":10005";
 
 class NeedsHuman extends Error {}
+
+const robotDir = () => {
+  const dir = join(config.dataDir, "robot");
+  mkdirSync(dir, { recursive: true });
+  return dir;
+};
+const sessionPath = (channelId: string) => join(robotDir(), `tiktok-${channelId}.json`);
+const connect = () =>
+  chromium.connectOverCDP(CDP, { timeout: 20_000 }).catch(() => {
+    throw new Error("navegador do robô fora do ar (container cortes-browser)");
+  });
+
+/** Logins em andamento: janela isolada aberta na tela remota esperando o usuário entrar na conta. */
+const pendingLogins = new Map<string, { browser: Browser; context: BrowserContext; page: Page; at: number }>();
+
+export function robotStatus(channelId: string) {
+  const p = sessionPath(channelId);
+  return {
+    saved: existsSync(p) ? statSync(p).mtime.toISOString() : null,
+    pending: pendingLogins.has(channelId),
+  };
+}
+
+/** Abre na tela remota uma janela isolada na página de login do TikTok, só para este canal. */
+export async function robotLoginStart(channelId: string) {
+  await robotLoginCancel(channelId);
+  const browser = await connect();
+  const context = await browser.newContext({
+    viewport: null,
+    ...(existsSync(sessionPath(channelId)) ? { storageState: sessionPath(channelId) } : {}),
+  });
+  const page = await context.newPage();
+  await page.goto("https://www.tiktok.com/login", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await page.bringToFront().catch(() => {});
+  pendingLogins.set(channelId, { browser, context, page, at: Date.now() });
+}
+
+/** Confere que a janela está logada (o Studio abre sem pedir login) e guarda a sessão do canal. */
+export async function robotLoginFinish(channelId: string) {
+  const p = pendingLogins.get(channelId);
+  if (!p) throw new Error("Nenhum login em andamento: clique em \"Entrar no TikTok pelo robô\" primeiro");
+  await p.page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await p.page.waitForTimeout(3000);
+  if (/\/login/.test(p.page.url())) throw new Error("Ainda não está logado: termine o login na tela remota e clique de novo");
+  await p.context.storageState({ path: sessionPath(channelId) });
+  await robotLoginCancel(channelId);
+}
+
+export async function robotLoginCancel(channelId: string) {
+  const p = pendingLogins.get(channelId);
+  pendingLogins.delete(channelId);
+  if (!p) return;
+  await p.context.close().catch(() => {});
+  await p.browser.close().catch(() => {});
+}
+
+/** Usa a conta já logada na janela principal do robô (como era antes das sessões por canal). */
+export async function robotAdoptMain(channelId: string) {
+  const browser = await connect();
+  try {
+    const main = browser.contexts()[0];
+    if (!main) throw new Error("janela principal do robô não encontrada");
+    const page = await main.newPage();
+    try {
+      await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await page.waitForTimeout(3000);
+      if (/\/login/.test(page.url())) throw new Error("a janela principal do robô não está logada no TikTok");
+    } finally {
+      await page.close().catch(() => {});
+    }
+    await main.storageState({ path: sessionPath(channelId) });
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+export function robotLogout(channelId: string) {
+  rmSync(sessionPath(channelId), { force: true });
+}
 
 async function needsHumanCheck(page: Page) {
   if (/\/login/.test(page.url())) throw new NeedsHuman("o TikTok está deslogado no navegador do robô");
@@ -35,11 +118,14 @@ async function dismissTips(page: Page) {
   }
 }
 
-export async function tiktokWebUpload(_ch: Channel, clip: Clip, file: string, opts: { dryRun?: boolean } = {}) {
-  const browser = await chromium.connectOverCDP(CDP, { timeout: 20_000 }).catch(() => {
-    throw new Error("navegador do robô fora do ar (container cortes-browser)");
-  });
-  const context = browser.contexts()[0] ?? (await browser.newContext());
+export async function tiktokWebUpload(ch: Channel, clip: Clip, file: string, opts: { dryRun?: boolean } = {}) {
+  // Sem sessão do canal não publica: evita postar na conta de outro canal que estiver aberta no robô.
+  if (!existsSync(sessionPath(ch.id))) {
+    void tg.alert(`🤖 Robô do TikTok sem login para "${ch.name}". Entre em Canais → ${ch.name} → TikTok → Robô do TikTok.`);
+    throw new Error(`robô TikTok: o canal ${ch.name} ainda não tem login no robô`);
+  }
+  const browser = await connect();
+  const context = await browser.newContext({ storageState: sessionPath(ch.id), viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
   try {
     await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -106,6 +192,7 @@ export async function tiktokWebUpload(_ch: Channel, clip: Clip, file: string, op
       page.getByText(/(foi publicado|sendo publicado|Your video (has been|is being) (posted|uploaded)|Vídeo publicado)/i).first().waitFor({ timeout: 3 * 60_000 }),
     ]);
     await needsHumanCheck(page);
+    await context.storageState({ path: sessionPath(ch.id) }).catch(() => {}); // mantém os cookies renovados
     return { status: "OK" as const, external_id: `web:${Date.now()}`, url: "" };
   } catch (e) {
     // Print da tela para entender a falha (data/robot/clip-ID.png).
@@ -113,11 +200,15 @@ export async function tiktokWebUpload(_ch: Channel, clip: Clip, file: string, op
     mkdirSync(dir, { recursive: true });
     await page.screenshot({ path: join(dir, `clip-${clip.id}.png`) }).catch(() => {});
     if (e instanceof NeedsHuman) {
-      void tg.alert(`🤖 Robô do TikTok parado: ${e.message}.\nResolva na tela remota: ${robotScreenUrl()}\nO post será tentado de novo automaticamente.`);
+      void tg.alert(
+        `🤖 Robô do TikTok parado em "${ch.name}": ${e.message}.\nRefaça o login em Canais → ${ch.name} → Robô do TikTok ` +
+          `(a janela aparece na tela remota: ${robotScreenUrl()}). O post será tentado de novo automaticamente.`,
+      );
     }
     throw new Error(`robô TikTok: ${(e as Error).message.split("\n")[0].slice(0, 300)}`);
   } finally {
     await page.close().catch(() => {});
+    await context.close().catch(() => {});
     await browser.close().catch(() => {}); // em conexão CDP, só desconecta; o Chromium continua aberto
   }
 }

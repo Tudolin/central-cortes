@@ -15,7 +15,7 @@ import { approve, needsTikTokChoices, rebalance, reject } from "./schedule.ts";
 import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
 import { chatCandidates, telegramBotInfo, telegramTest, tg } from "./telegram.ts";
 import { diskState } from "./disk.ts";
-import { robotScreenUrl } from "./publish/tiktokWeb.ts";
+import { robotAdoptMain, robotLoginCancel, robotLoginFinish, robotLoginStart, robotLogout, robotScreenUrl, robotStatus } from "./publish/tiktokWeb.ts";
 
 const publicChannel = (c: Channel) => {
   const creds = credentialsOf(c);
@@ -23,6 +23,7 @@ const publicChannel = (c: Channel) => {
     ...c,
     credentials: Object.keys(creds).filter((k) => !/^(youtube|tiktok)_/.test(k)),
     connections: { youtube: creds.youtube_account ?? null, tiktok: creds.tiktok_account ?? null },
+    robot: robotStatus(c.id),
   };
 };
 
@@ -305,6 +306,30 @@ function saveChannel(id: string, body: Partial<Channel> & { credentials?: unknow
   bus.emit("channel-saved", id);
   return publicChannel(getChannel(id)!);
 }
+
+// ---------- Robô do TikTok: login por canal ----------
+
+const robotAction = (fn: (id: string) => Promise<unknown> | unknown) => async (_q: unknown, _r: unknown, [id]: string[]) => {
+  must(getChannel(id), "Canal");
+  try {
+    await fn(id);
+  } catch (e) {
+    throw new HttpError(409, (e as Error).message);
+  }
+  bus.emit("change", { table: "channels" });
+  return { ok: true, robot: robotStatus(id), screen: robotScreenUrl() };
+};
+route("POST", "/api/channels/:id/robot/login", robotAction(robotLoginStart));
+route("POST", "/api/channels/:id/robot/finish", robotAction(async (id) => {
+  await robotLoginFinish(id);
+  updateChannel(id, { tiktok_mode: "browser" }); // login salvo = canal passa a publicar pelo robô
+}));
+route("POST", "/api/channels/:id/robot/cancel", robotAction(robotLoginCancel));
+route("POST", "/api/channels/:id/robot/adopt-main", robotAction(async (id) => {
+  await robotAdoptMain(id);
+  updateChannel(id, { tiktok_mode: "browser" });
+}));
+route("POST", "/api/channels/:id/robot/logout", robotAction(robotLogout));
 
 // ---------- OAuth (YouTube / TikTok) ----------
 
