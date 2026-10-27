@@ -594,6 +594,7 @@ const CH_FIELDS = [
   ["highlight_color", "Cor de destaque", { type: "color" }],
   ["max_words_per_frame", "Palavras por quadro (2–4)", { type: "number" }],
   ["title_banner", "Faixa com o título no vídeo (vira a capa)", { select: [["1", "Sim"], ["0", "Não"]] }],
+  ["title_style", "Títulos dos posts", { select: [["upper", "CAIXA ALTA"], ["sentence", "Caixa normal (só a primeira letra)"]] }],
   ["banner_color", "Cor da faixa", { type: "color" }],
   ["banner_text_color", "Cor do texto da faixa", { type: "color" }],
   ["caption_template", "Template de legenda social — {titulo_corte} {url_com_timestamp} {url_video_original} {timestamp_segundos}", { area: true, full: true, rows: 10 }],
@@ -601,7 +602,7 @@ const CH_FIELDS = [
   ["schedule_slots", "Horários diários (HH:MM separados por vírgula)", { full: true }],
   ["publish_targets", "Publicar em", { targets: true, full: true }],
   ["youtube_privacy", "YouTube: visibilidade", { select: ["public", "unlisted", "private"] }],
-  ["youtube_category", "YouTube: categoria", { select: [["25", "Notícias e política"], ["22", "Pessoas e blogs"], ["24", "Entretenimento"], ["27", "Educação"]] }],
+  ["youtube_category", "YouTube: categoria", { select: [["25", "Notícias e política"], ["22", "Pessoas e blogs"], ["24", "Entretenimento"], ["27", "Educação"], ["17", "Esportes"], ["26", "Estilo e dicas"]] }],
   ["tiktok_mode", "TikTok: modo", { select: [["inbox", "Rascunho na caixa de entrada (sem auditoria)"], ["direct", "Publicação direta — visibilidade e interações escolhidas a cada aprovação (app auditado; reconecte a conta após trocar)"], ["browser", "Navegador (robô no TikTok Studio — publica direto, sem app aprovado)"]] }],
   ["webhook_url", "Webhook após publicar (opcional)", { full: true }],
 ];
@@ -827,6 +828,7 @@ const ASSET_SLOTS = [
   ["logo", "Logo / marca d'água", "image/png,image/jpeg,image/webp"],
   ["music", "Trilha de fundo", "audio/*"],
 ];
+const FONTS = ["Anton", "Archivo SemiBold", "Arial Black", "Montserrat ExtraBold", "Impact", "Bebas Neue"];
 const useOf = (t) => new Set(JSON.parse(t?.use_items || '["banner"]'));
 const brandOf = (ch) => JSON.parse(ch?.brand || "{}");
 const opt = (pairs, cur) => pairs.map(([v, l]) => `<option value="${v}" ${String(cur) === v ? "selected" : ""}>${esc(l)}</option>`).join("");
@@ -926,11 +928,28 @@ function renderBrand() {
         ${extra[kind] ?? ""}</div>`;
     }).join("")}</div>
     <div class="form">
+      <h3>Faixa de título (capa nos primeiros 2 s)</h3>
+      <label>Estilo <select name="banner_style">${opt([["brush", "Tarja de pincel (cor da faixa + texto)"], ["bar", "Capa: título grande, uma palavra em destaque e barra embaixo"]], b.banner?.style ?? "brush")}</select></label>
+      <label>Fonte do título <input name="banner_font" value="${esc(b.banner?.font ?? "")}" placeholder="padrão (Impact)" list="dl-fonts"></label>
+      <label>Tamanho do título (estilo capa) <input name="banner_size" type="number" min="60" max="400" value="${b.banner?.size ?? 150}"></label>
       <h3>Legendas</h3>
-      <label>Fonte (instalada no PC do worker) <input name="sub_font" value="${esc(b.subtitle?.font ?? "")}" placeholder="padrão do worker" list="dl-fonts"><datalist id="dl-fonts">${["Arial Black", "Montserrat ExtraBold", "Impact", "Bebas Neue", "Anton"].map((f) => `<option value="${f}">`).join("")}</datalist></label>
+      <label>Fonte <input name="sub_font" value="${esc(b.subtitle?.font ?? "")}" placeholder="padrão do worker" list="dl-fonts"><datalist id="dl-fonts">${FONTS.map((f) => `<option value="${f}">`).join("")}</datalist></label>
       <label>Tamanho <input name="sub_size" type="number" min="40" max="160" value="${b.subtitle?.size ?? 84}"></label>
       <label>Cor do texto <input name="sub_color" type="color" value="${b.subtitle?.color ?? "#FFFFFF"}"></label>
       <label>Cor de destaque <input type="color" value="${ch.highlight_color}" disabled title="Edite em Legendas, no formulário do canal abaixo"></label>
+      <label>Contorno (px) <input name="sub_outline" type="number" min="0" max="20" value="${b.subtitle?.outline ?? 6}"></label>
+      <label>Cor do contorno <input name="sub_outline_color" type="color" value="${b.subtitle?.outline_color ?? "#000000"}"></label>
+      <label>Sombra (px) <input name="sub_shadow" type="number" min="0" max="20" value="${b.subtitle?.shadow ?? 3}"></label>
+      <label>Palavra falada <select name="sub_active">${opt([["color", "Cor de destaque + aumento"], ["scale", "Só aumento (cor só na palavra-chave)"]], b.subtitle?.active ?? "color")}</select></label>
+      <h3>Crédito da fonte</h3>
+      <label>Texto <input name="credit_format" value="${esc(b.credit?.format ?? "Fonte: {fonte}")}" placeholder="via {fonte}"></label>
+      <label>Fonte <input name="credit_font" value="${esc(b.credit?.font ?? "")}" placeholder="a da legenda" list="dl-fonts"></label>
+      <label>Cor <input name="credit_color" type="color" value="${b.credit?.color ?? "#FFFFFF"}"></label>
+      <label class="checks"><input type="checkbox" name="credit_box" ${b.credit?.box !== false ? "checked" : ""}> Caixa escura atrás</label>
+      <div class="full muted" style="font-size:12px">{fonte} vira o @ do canal de onde o vídeo veio. Com o logo no canto superior esquerdo, o crédito fica logo abaixo dele.</div>
+      <h3>Pilares de conteúdo</h3>
+      <label class="full">Pilares (separados por vírgula) <input name="pillars" value="${esc((b.pillars ?? []).join(", "))}" placeholder="ex.: TREINO, MENTALIDADE"></label>
+      <div class="full muted" style="font-size:12px">A IA classifica cada corte em um pilar: ele aparece como tag na capa e vira {pilar} na legenda social.</div>
       <h3>Lower third</h3>
       <label>Cor da caixa do nome <input name="lt_color" type="color" value="${b.lower_third?.color ?? ch.banner_color}"></label>
       <label>Cor do texto <input name="lt_text" type="color" value="${b.lower_third?.text_color ?? "#FFFFFF"}"></label>
@@ -938,6 +957,10 @@ function renderBrand() {
       <h3>Zonas seguras</h3>
       <div class="full checks wrap">${[["tiktok", "TikTok"], ["youtube", "YouTube Shorts"], ["reels", "Instagram Reels"]].map(([z, l]) => `<label><input type="checkbox" name="zone_${z}" ${zones.includes(z) ? "checked" : ""}> ${l}</label>`).join("")}</div>
       <div class="full muted" style="font-size:12px">Legenda, logo, CTA e lower third ficam fora das áreas cobertas pela interface das plataformas marcadas.</div>
+      <label>Margens exatas: topo <input name="safe_top" type="number" min="0" value="${b.safe_insets?.top ?? ""}" placeholder="auto"></label>
+      <label>base <input name="safe_bottom" type="number" min="0" value="${b.safe_insets?.bottom ?? ""}" placeholder="auto"></label>
+      <label>esquerda <input name="safe_left" type="number" min="0" value="${b.safe_insets?.left ?? ""}" placeholder="auto"></label>
+      <label>direita <input name="safe_right" type="number" min="0" value="${b.safe_insets?.right ?? ""}" placeholder="auto"></label>
       <div class="full actions"><button class="btn primary" type="submit">Salvar identidade</button></div>
     </div>
   </form>`;
@@ -951,9 +974,18 @@ function brandFromForm(form) {
     cta: { asset: id("cta"), at: fd.cta_at, position: fd.cta_position, scale: Number(fd.cta_scale), key: fd.cta_key },
     logo: { asset: id("logo"), position: fd.logo_position, opacity: Number(fd.logo_opacity), scale: Number(fd.logo_scale) },
     music: { asset: id("music"), volume: Number(fd.music_volume) },
-    subtitle: { font: fd.sub_font, size: Number(fd.sub_size), color: fd.sub_color },
+    subtitle: {
+      font: fd.sub_font, size: Number(fd.sub_size), color: fd.sub_color, outline: Number(fd.sub_outline), shadow: Number(fd.sub_shadow),
+      outline_color: fd.sub_outline_color, active: fd.sub_active,
+    },
     lower_third: { color: fd.lt_color, text_color: fd.lt_text, duration: Number(fd.lt_duration) },
     safe_zones: ["tiktok", "youtube", "reels"].filter((z) => fd[`zone_${z}`]),
+    safe_insets: ["top", "bottom", "left", "right"].every((k) => fd[`safe_${k}`] !== "")
+      ? { top: Number(fd.safe_top), bottom: Number(fd.safe_bottom), left: Number(fd.safe_left), right: Number(fd.safe_right) }
+      : null,
+    banner: { style: fd.banner_style, font: fd.banner_font, size: Number(fd.banner_size) || 150 },
+    credit: { format: fd.credit_format, font: fd.credit_font, color: fd.credit_color, box: !!fd.credit_box },
+    pillars: String(fd.pillars || "").split(",").map((p) => p.trim().toUpperCase()).filter(Boolean),
   };
 }
 
@@ -1003,6 +1035,7 @@ function renderTemplates() {
           <label>Layout <select name="layout">${opt(LAYOUTS, t.layout)}</select></label>
           <label>Abertura <select name="hook">${opt([["inicio", "Começa no gancho"], ["teaser", "Teaser: repete a fala mais forte no início"]], t.hook)}</select></label>
           <label>Tamanho da legenda (×) <input name="sub_scale" type="number" step="0.05" min="0.5" max="2" value="${t.sub_scale}"></label>
+          <label>Zoom de ritmo a cada (s, 0 = só nas ênfases) <input name="zoom_every" type="number" step="0.5" min="0" max="30" value="${t.zoom_every ?? 0}"></label>
           <label>Pedido de inscrição em <input name="cta_at" value="${esc(t.cta_at)}" placeholder="padrão do canal"></label>
           <div class="full checks wrap">
             <label><input type="checkbox" name="remove_silence" ${t.remove_silence ? "checked" : ""}> Remover silêncios</label>
@@ -1023,6 +1056,7 @@ function tplFromForm(form) {
     name: fd.name, aspect: fd.aspect, min_duration: Number(fd.min_duration), max_duration: Number(fd.max_duration), layout: fd.layout,
     hook: fd.hook, sub_scale: Number(fd.sub_scale), cta_at: fd.cta_at, instructions: fd.instructions,
     remove_silence: !!fd.remove_silence, use: Object.keys(USE_LABELS).filter((k) => fd[`use_${k}`]),
+    zoom_every: Number(fd.zoom_every) || 0,
   };
 }
 
@@ -1085,7 +1119,8 @@ function refreshChannelPreview() {
     layout: ui.pvLayout !== "auto" ? ui.pvLayout : tpl?.layout,
     title: "Ninguém esperava essa resposta no meio do debate",
     speaker: { name: "Nome do Convidado", role: "Cargo ou função" },
-    credit: "Fonte: canal original",
+    source: "@canaloriginal",
+    keywords: ["ninguém"],
     assets: state.assets.filter((a) => a.channel_id === ch.id),
     bg: sampleBg(ch.id),
     main: 20,
@@ -1110,7 +1145,9 @@ function refreshClipPreview() {
     layout: $("#f-layout")?.value || c.layout,
     title: $("#f-title")?.value || c.title,
     speaker: { name: $("#o-name")?.value.trim() ?? "", role: $("#o-role")?.value.trim() ?? "" },
-    credit: job?.video_url ? `Fonte: ${job.uploader || job.title}` : c.video_title ? `Fonte: ${c.video_title}` : null,
+    source: job?.uploader || job?.title || c.video_title,
+    pillar: c.pillar,
+    keywords: JSON.parse(c.keywords || "[]"),
     assets: state.assets.filter((a) => a.channel_id === ch.id),
     bg: studioCtx.hasProxy ? { url: `/media/clip/${c.id}.proxy.mp4?v=${encodeURIComponent(c.rendered_at || "")}`, start: studioCtx.start - studioCtx.proxyStart } : null,
     main: Math.max(3, studioCtx.end - studioCtx.start),
@@ -1323,11 +1360,34 @@ document.addEventListener("click", act(async (e) => {
     renderIntegrations();
   }
   if (t.id === "new-channel") {
-    ui.channelId = "";
-    $("#channel-form").dataset.for = "-";
-    renderChannels();
+    const d = $("#new-channel-dialog");
+    d.querySelector("form").reset();
+    d.showModal();
   }
 }));
+// Novo canal: só o essencial; identidade, modelos e contas ficam na tela do canal, já criada com padrões.
+$("#new-channel-dialog form").addEventListener("input", (e) => {
+  const f = e.currentTarget;
+  if (e.target.name === "name" && !f.id_edited) f.elements.id.value = slug(f.elements.name.value);
+  if (e.target.name === "id") f.id_edited = true;
+});
+$("#new-channel-dialog form").addEventListener("submit", act(async (e) => {
+  if (e.submitter?.value === "cancel") return;
+  e.preventDefault();
+  const fd = Object.fromEntries(new FormData(e.target));
+  const ch = await api("/api/channels", { method: "POST", body: {
+    id: slug(fd.id || fd.name), name: fd.name, niche: fd.niche, tone: fd.tone, schedule_slots: fd.schedule_slots,
+    publish_targets: JSON.stringify(["youtube", "tiktok"].filter((p) => fd[`t_${p}`])), title_style: fd.title_style,
+  } });
+  $("#new-channel-dialog").close();
+  ui.channelId = ch.id;
+  $("#channel-form").dataset.for = "";
+  await refresh();
+  scrollTo(0, 0);
+  toast(`Canal ${ch.name} criado — agora conecte as contas e ajuste a identidade`);
+}));
+const slug = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+
 $("#studio-filter").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;

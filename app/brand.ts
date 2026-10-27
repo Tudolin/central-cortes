@@ -29,9 +29,24 @@ export interface Brand {
   cta?: { asset?: number | null; at?: string; position?: "top" | "center" | "bottom"; scale?: number; key?: "none" | "green" };
   logo?: { asset?: number | null; position?: "top-left" | "top-right" | "bottom-left" | "bottom-right"; opacity?: number; scale?: number };
   music?: { asset?: number | null; volume?: number };
-  subtitle?: { font?: string; size?: number; color?: string };
+  subtitle?: { font?: string; size?: number; color?: string; outline?: number; shadow?: number; outline_color?: string; active?: "color" | "scale" };
   lower_third?: { color?: string; text_color?: string; duration?: number };
   safe_zones?: SafeZone[];
+  /** Margens exatas (px no quadro 1080x1920); quando definidas, valem no lugar das zonas por plataforma. */
+  safe_insets?: Insets | null;
+  /** Faixa de título: "brush" (tarja de pincel) ou "bar" (título grande com barra de acento embaixo). */
+  banner?: { style?: "brush" | "bar"; font?: string; size?: number };
+  /** Crédito da fonte: texto ("{fonte}" = @ do canal original), fonte, cor e se leva caixa escura. */
+  credit?: { format?: string; font?: string; color?: string; box?: boolean };
+  /** Pilares de conteúdo: a IA escolhe um por corte (vira a tag da capa e o {pilar} da legenda). */
+  pillars?: string[];
+}
+
+export interface Insets {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
 }
 
 export interface Template {
@@ -49,6 +64,7 @@ export interface Template {
   sub_scale: number;
   instructions: string;
   position: number;
+  zoom_every: number; // zoom leve a cada N segundos (0 = só nas ênfases)
 }
 
 export interface Overrides {
@@ -67,16 +83,21 @@ export interface RenderSpec {
   aspect: Aspect;
   removeSilence: boolean;
   teaser: { start: number; end: number } | null;
-  banner: boolean;
-  subtitle: { font: string; size: number; color: string; highlight: string; maxWords: number };
+  banner: { style: "brush" | "bar"; font: string; size: number; color: string; text: string; accent: string; tag: string } | null;
+  subtitle: {
+    font: string; size: number; color: string; highlight: string; maxWords: number;
+    outline: number; shadow: number; outlineColor: string; active: "color" | "scale";
+  };
   intro: AssetRef | null;
   outro: AssetRef | null;
   cta: { asset: AssetRef; at: string; position: "top" | "center" | "bottom"; scale: number; key: "none" | "green" } | null;
   logo: { asset: AssetRef; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; opacity: number; scale: number } | null;
   music: { asset: AssetRef; volume: number } | null;
   lowerThird: { name: string; role: string; color: string; textColor: string; duration: number } | null;
-  credit: string | null;
+  credit: { text: string; font: string; color: string; box: boolean } | null;
   safeZones: SafeZone[];
+  safeInsets: Insets | null;
+  zoomEvery: number;
 }
 
 export const parseJson = <T>(s: string | null | undefined, fallback: T): T => {
@@ -93,22 +114,22 @@ export const templateUse = (t: Template | undefined) => new Set(parseJson<UseKey
 export const DEFAULT_TEMPLATES: Omit<Template, "id" | "channel_id" | "position">[] = [
   {
     name: "Podcast", aspect: "9:16", min_duration: 30, max_duration: 90, layout: "auto", remove_silence: 1, hook: "inicio",
-    use_items: JSON.stringify(["banner", "logo", "cta", "lower_third", "outro"]), cta_at: "", sub_scale: 1,
+    use_items: JSON.stringify(["banner", "logo", "cta", "lower_third", "outro"]), cta_at: "", sub_scale: 1, zoom_every: 0,
     instructions: "Podcast/entrevista: um tema por corte; o título deve nomear o tema discutido.",
   },
   {
     name: "Debate", aspect: "9:16", min_duration: 30, max_duration: 90, layout: "split_screen", remove_silence: 1, hook: "teaser",
-    use_items: JSON.stringify(["banner", "logo", "cta", "lower_third", "outro"]), cta_at: "", sub_scale: 1,
+    use_items: JSON.stringify(["banner", "logo", "cta", "lower_third", "outro"]), cta_at: "", sub_scale: 1, zoom_every: 0,
     instructions: "Debate: priorize confrontos diretos, réplicas e tréplicas. O teaser deve ser a fala mais forte do embate.",
   },
   {
     name: "Daily", aspect: "9:16", min_duration: 15, max_duration: 45, layout: "single_speaker", remove_silence: 1, hook: "inicio",
-    use_items: JSON.stringify(["banner", "logo", "cta"]), cta_at: "fim", sub_scale: 1.2,
+    use_items: JSON.stringify(["banner", "logo", "cta"]), cta_at: "fim", sub_scale: 1.2, zoom_every: 0,
     instructions: "Daily: cortes curtos e diretos, uma ideia só, sem introdução.",
   },
   {
     name: "React", aspect: "9:16", min_duration: 30, max_duration: 90, layout: "screen_share_focus", remove_silence: 0, hook: "inicio",
-    use_items: JSON.stringify(["banner", "logo", "credit"]), cta_at: "", sub_scale: 1,
+    use_items: JSON.stringify(["banner", "logo", "credit"]), cta_at: "", sub_scale: 1, zoom_every: 0,
     instructions: "React: o conteúdo comentado é o foco; o corte precisa trazer a reação/comentário, não só o material original.",
   },
 ];
@@ -145,13 +166,22 @@ export function resolveSpec(ch: Channel, job: Job, clip: Clip, tpl: Template | u
     aspect: (clip.aspect as Aspect) || tpl?.aspect || "9:16",
     removeSilence: ov.remove_silence ?? (!legacy && !!tpl?.remove_silence),
     teaser: wantTeaser && teaserOk ? { start: clip.teaser_start, end: clip.teaser_end } : null,
-    banner: !!ch.title_banner && use("banner"),
+    banner: ch.title_banner && use("banner")
+      ? {
+          style: brand.banner?.style ?? "brush", font: brand.banner?.font || "", size: brand.banner?.size || 150, color: ch.banner_color, text: ch.banner_text_color,
+          accent: ch.highlight_color, tag: clip.pillar || "",
+        }
+      : null,
     subtitle: {
       font: brand.subtitle?.font || "",
       size: Math.round((brand.subtitle?.size || 84) * (tpl?.sub_scale || 1)),
       color: brand.subtitle?.color || "#FFFFFF",
       highlight: ch.highlight_color,
       maxWords: ch.max_words_per_frame,
+      outline: brand.subtitle?.outline ?? 6,
+      shadow: brand.subtitle?.shadow ?? 3,
+      outlineColor: brand.subtitle?.outline_color || "#000000",
+      active: brand.subtitle?.active ?? "color",
     },
     intro: use("intro") ? ref(brand.intro) : null,
     outro: use("outro") ? ref(brand.outro) : null,
@@ -178,8 +208,17 @@ export function resolveSpec(ch: Channel, job: Job, clip: Clip, tpl: Template | u
             duration: brand.lower_third?.duration ?? 4,
           }
         : null,
-    credit: use("credit") && job.video_url ? `Fonte: ${job.uploader || job.title}` : null,
+    credit: use("credit") && job.video_url
+      ? {
+          text: (brand.credit?.format || "Fonte: {fonte}").replaceAll("{fonte}", job.uploader || job.title),
+          font: brand.credit?.font || "",
+          color: brand.credit?.color || "#FFFFFF",
+          box: brand.credit?.box ?? true,
+        }
+      : null,
     safeZones: safeZonesOf(ch, brand),
+    safeInsets: brand.safe_insets ?? null,
+    zoomEvery: tpl?.zoom_every ?? 0,
   };
 }
 

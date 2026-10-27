@@ -6,6 +6,11 @@ export interface SubtitleOptions {
   color: string; // #RRGGBB
   highlightColor: string; // #RRGGBB
   maxWords: number;
+  outline: number;
+  shadow: number;
+  outlineColor: string;
+  /** Palavra falada: "color" = cor de destaque + aumento; "scale" = só aumento (cor só nas palavras-chave). */
+  active: "color" | "scale";
   align: number;
   marginV: number;
   /** Resolução do quadro (PlayRes) e fator de escala dos elementos (16:9 usa letras menores). */
@@ -14,7 +19,7 @@ export interface SubtitleOptions {
   bannerAvoid?: { align: number; marginV: number };
   banner?: BannerOptions;
   lowerThird?: LowerThirdOptions;
-  credit?: { text: string; x: number; y: number };
+  credit?: { text: string; x: number; y: number; font: string; color: string; box: boolean };
 }
 
 export interface LowerThirdOptions {
@@ -37,6 +42,16 @@ export interface BannerOptions {
   centerX: number;
   maxWidth: number;
   k: number; // escala
+  style: "brush" | "bar";
+  size: number; // tamanho base do título no estilo "bar"
+  minTop: number; // topo mínimo do bloco (abaixo do selo e do crédito)
+  accent: string; // cor da palavra em destaque e da barra (estilo "bar")
+  keywords: string[];
+  tag: string; // rótulo do pilar acima do título (estilo "bar")
+  tagFont: string;
+  dim: boolean; // escurece o quadro atrás do título (capa)
+  width: number;
+  height: number;
   duration: number;
   seed: number; // borda "pincelada" determinística por corte
 }
@@ -110,6 +125,57 @@ function bannerEvents(b: BannerOptions): string[] {
     `Dialogue: 0,0:00:00.00,${end},BannerBox,,0,0,0,,{\\an7\\pos(0,0)${rot}${fade}\\c${assColor(b.color)}\\bord0\\shad8\\4a&H80&\\p1}${shape}{\\p0}`,
     `Dialogue: 1,0:00:00.00,${end},BannerText,,0,0,0,,{\\an5\\pos(${Math.round(b.centerX)},${Math.round(b.centerY + 4)})${rot}${fade}\\fs${size}}${lines.join("\\N")}`,
   ];
+}
+
+/**
+ * Faixa estilo "capa": quadro escurecido, tag do pilar, título grande com uma palavra na cor de acento
+ * e uma barra de acento sob o título. Mesmo tempo da faixa de pincel (2 s + fade).
+ */
+function barBannerEvents(b: BannerOptions): string[] {
+  const text = b.title.toUpperCase().replace(/[{}\\]/g, "");
+  const balanced = (max: number) => {
+    const n = wrapTitle(text, max).length;
+    let lim = max;
+    while (lim > 8 && wrapTitle(text, lim - 1).length === n) lim--;
+    return wrapTitle(text, lim);
+  };
+  let size = Math.round(b.size * b.k);
+  let lines = balanced(14);
+  if (lines.length > 3) {
+    size = Math.round(b.size * 0.8 * b.k);
+    lines = balanced(18);
+  }
+  // Uma palavra na cor de acento: a primeira palavra-chave do título, ou a mais longa.
+  const words = text.split(/\s+/);
+  const keys = new Set(b.keywords.map(norm));
+  const accentWord = words.find((w) => keys.has(norm(w))) ?? words.reduce((a, w) => (norm(w).length > norm(a).length ? w : a), "");
+  let painted = false;
+  const paint = (line: string) => line.split(" ").map((w) => {
+    if (!painted && w === accentWord) {
+      painted = true;
+      return `{\\c${assColor(b.accent)}}${w}{\\c${assColor(b.textColor)}}`;
+    }
+    return w;
+  }).join(" ");
+  const lineH = size * 0.95;
+  const blockH = lines.length * lineH;
+  const top = Math.round(Math.max(b.centerY - blockH / 2, b.minTop));
+  const end = assTime(Math.min(b.duration, BANNER_SECONDS + BANNER_FADE / 1000));
+  const fade = `\\fad(0,${BANNER_FADE})`;
+  // Barra com a largura exata da linha mais longa: a própria linha, invisível, com caixa opaca (BorderStyle 3)
+  // achatada — o libass mede o texto por nós.
+  const longest = lines.reduce((a, l) => (l.length > a.length ? l : a), "");
+  const half = Math.round(7 * b.k);
+  const barY = Math.round(top + blockH + 24 * b.k);
+  const out = [
+    `Dialogue: 0,0:00:00.00,${end},BannerBox,,0,0,0,,{\\an7\\pos(0,0)${fade}\\c&H000000&\\1a&H66&\\bord0\\shad0\\p1}m 0 0 l ${b.width} 0 ${b.width} ${b.height} 0 ${b.height}{\\p0}`,
+    `Dialogue: 1,0:00:00.00,${end},BannerText,,0,0,0,,{\\an8\\pos(${Math.round(b.centerX)},${top})${fade}\\fs${size}\\c${assColor(b.textColor)}\\bord${Math.round(8 * b.k)}\\shad0}${lines.map(paint).join("\\N")}`,
+    `Dialogue: 1,0:00:00.00,${end},BarBox,,0,0,0,,{\\an8\\pos(${Math.round(b.centerX)},${barY + half})${fade}\\fs${size}\\fscy1\\1a&HFF&\\3c${assColor(b.accent)}\\4c${assColor(b.accent)}\\xbord${half}\\ybord${half * 100}\\shad0}${longest}`,
+  ];
+  if (b.tag) {
+    out.push(`Dialogue: 2,0:00:00.00,${end},Tag,,0,0,0,,{\\an2\\pos(${Math.round(b.centerX)},${Math.round(top - 28 * b.k)})${fade}\\fn${b.tagFont}}${b.tag.toUpperCase().replace(/[{}\\\\]/g, "")}`);
+  }
+  return out;
 }
 
 const clean = (s: string) => s.replace(/[{}\\]/g, "").replace(/\n/g, " ");
@@ -193,7 +259,7 @@ export function buildAss(words: Word[], keywords: string[], o: SubtitleOptions):
       const text = chunk
         .map((w) => {
           const t = w.w.toUpperCase().replace(/[{}\\]/g, "");
-          if (w === active) return `{\\c${hi}\\fscx112\\fscy112}${t}{\\r}`;
+          if (w === active) return o.active === "scale" && !keys.has(norm(w.w)) ? `{\\fscx112\\fscy112}${t}{\\r}` : `{\\c${hi}\\fscx112\\fscy112}${t}{\\r}`;
           if (keys.has(norm(w.w))) return `{\\c${hi}}${t}{\\r}`;
           return t;
         })
@@ -202,7 +268,7 @@ export function buildAss(words: Word[], keywords: string[], o: SubtitleOptions):
       events.push(`Dialogue: 2,${assTime(start)},${assTime(end)},${style},,0,0,0,,${text}`);
     });
   });
-  if (o.banner) events.unshift(...bannerEvents(o.banner));
+  if (o.banner) events.unshift(...(o.banner.style === "bar" ? barBannerEvents(o.banner) : bannerEvents(o.banner)));
   if (o.lowerThird) events.push(...lowerThirdEvents(o.lowerThird, o.res.k));
   if (o.credit) {
     const end = assTime(Math.max(...words.map((w) => w.e), o.banner?.duration ?? 0, 1) + 1);
@@ -214,6 +280,11 @@ export function buildAss(words: Word[], keywords: string[], o: SubtitleOptions):
   const bannerText = assColor(o.banner?.textColor ?? "#FFD700");
   const base = assColor(o.color);
   const lt = { text: assColor(o.lowerThird?.textColor ?? "#FFFFFF"), box: assColor(o.lowerThird?.color ?? "#D7161E") };
+  const outline = assColor(o.outlineColor);
+  const cr = o.credit;
+  const creditStyle = cr?.box
+    ? `Style: Credit,${cr.font || o.font},${fs(32)},${assColor(cr.color)},${assColor(cr.color)},&H60000000&,&H60000000&,0,0,0,0,100,100,0,0,3,${fs(10)},0,7,0,0,0,1`
+    : `Style: Credit,${cr?.font || o.font},${fs(30)},${assColor(cr?.color ?? "#FFFFFF")},${assColor(cr?.color ?? "#FFFFFF")},&H00000000&,&H80000000&,0,0,0,0,100,100,0,0,1,${fs(2)},0,7,0,0,0,1`;
 
   return `[Script Info]
 ScriptType: v4.00+
@@ -224,13 +295,15 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cut,${o.font},${fs(o.size)},${base},${base},&H00000000&,&H99000000&,-1,0,0,0,100,100,1,0,1,${fs(6)},${fs(3)},${o.align},80,80,${o.marginV},1
-Style: CutAlt,${o.font},${fs(o.size)},${base},${base},&H00000000&,&H99000000&,-1,0,0,0,100,100,1,0,1,${fs(6)},${fs(3)},${o.bannerAvoid?.align ?? o.align},80,80,${o.bannerAvoid?.marginV ?? o.marginV},1
+Style: Cut,${o.font},${fs(o.size)},${base},${base},${outline},&H99000000&,-1,0,0,0,100,100,1,0,1,${fs(o.outline)},${fs(o.shadow)},${o.align},80,80,${o.marginV},1
+Style: CutAlt,${o.font},${fs(o.size)},${base},${base},${outline},&H99000000&,-1,0,0,0,100,100,1,0,1,${fs(o.outline)},${fs(o.shadow)},${o.bannerAvoid?.align ?? o.align},80,80,${o.bannerAvoid?.marginV ?? o.marginV},1
 Style: BannerBox,${bannerFont},20,&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H80000000&,0,0,0,0,100,100,0,0,1,0,8,7,0,0,0,1
 Style: BannerText,${bannerFont},86,${bannerText},${bannerText},&H00000000&,&H00000000&,0,0,0,0,100,100,1,0,1,${fs(5)},0,5,0,0,0,1
 Style: LTName,${o.font},${fs(54)},${lt.text},${lt.text},${lt.box},${lt.box},-1,0,0,0,100,100,1,0,3,${fs(14)},0,1,0,0,0,1
 Style: LTRole,${o.font},${fs(36)},&H00FFFFFF&,&H00FFFFFF&,&H20101010&,&H20101010&,0,0,0,0,100,100,0,0,3,${fs(12)},0,1,0,0,0,1
-Style: Credit,${o.font},${fs(32)},&H00FFFFFF&,&H00FFFFFF&,&H60000000&,&H60000000&,0,0,0,0,100,100,0,0,3,${fs(10)},0,7,0,0,0,1
+${creditStyle}
+Style: BarBox,${bannerFont},100,&HFF000000&,&HFF000000&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,3,7,0,8,0,0,0,1
+Style: Tag,${o.banner?.tagFont || o.font},${fs(40)},&H00FFFFFF&,&H00FFFFFF&,&H000E0E0D&,&H000E0E0D&,0,0,0,0,100,100,3,0,3,${fs(10)},0,2,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

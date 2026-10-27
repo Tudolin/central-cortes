@@ -75,6 +75,21 @@
     </section>
   </main>
 
+  <dialog id="new-channel-dialog">
+    <form method="dialog" class="form">
+      <h3>Novo canal</h3>
+      <label class="full">Nome do canal <input name="name" required placeholder="ex.: Última Rep"></label>
+      <label class="full">ID interno <input name="id" required pattern="[a-z0-9_]+" placeholder="gerado a partir do nome"></label>
+      <label class="full">Sobre o que é o canal <textarea name="niche" rows="2" placeholder="nicho, público e o que entra nos cortes"></textarea></label>
+      <label class="full">Tom de voz <textarea name="tone" rows="2" placeholder="como os títulos e legendas devem soar"></textarea></label>
+      <label>Horários de postagem <input name="schedule_slots" value="12:00,18:30" placeholder="HH:MM, separados por vírgula"></label>
+      <label>Títulos <select name="title_style"><option value="sentence">Caixa normal</option><option value="upper">CAIXA ALTA</option></select></label>
+      <div class="full checks"><label><input type="checkbox" name="t_youtube" checked> ▶ YouTube</label><label><input type="checkbox" name="t_tiktok" checked> ♪ TikTok</label></div>
+      <div class="full muted" style="font-size:12px">O canal nasce com modelos de corte prontos. Depois é só conectar as contas e, se quiser, ajustar a identidade visual.</div>
+      <div class="full actions"><button class="btn primary" type="submit">Criar canal</button><button class="btn" value="cancel" formnovalidate>Cancelar</button></div>
+    </form>
+  </dialog>
+
   <div id="toast" role="status" aria-live="polite"></div>
   <script type="module" src="/app.js"></script>
 </body>

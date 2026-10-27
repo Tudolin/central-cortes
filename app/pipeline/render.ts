@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ctaStart, type RenderSpec, type SafeZone } from "../brand.ts";
+import { ctaStart, type Insets, type RenderSpec, type SafeZone } from "../brand.ts";
 import { config } from "../config.ts";
 import type { Channel, Clip } from "../db.ts";
 import { exec } from "../proc.ts";
@@ -35,12 +35,6 @@ function videoCodecArgs(): string[] {
 
 // ---------- Zonas seguras (1080x1920): onde a interface de cada app cobre o vídeo ----------
 
-interface Insets {
-  top: number;
-  bottom: number;
-  left: number;
-  right: number;
-}
 const ZONES: Record<SafeZone, Insets> = {
   tiktok: { top: 130, bottom: 420, left: 40, right: 140 }, // legenda + botões à direita
   youtube: { top: 120, bottom: 380, left: 40, right: 120 },
@@ -49,6 +43,7 @@ const ZONES: Record<SafeZone, Insets> = {
 
 function safeInsets(spec: RenderSpec): Insets {
   if (spec.aspect === "16:9") return { top: 50, bottom: 50, left: 60, right: 60 };
+  if (spec.safeInsets) return spec.safeInsets;
   const s = { top: 60, bottom: 60, left: 50, right: 50 };
   for (const z of spec.safeZones) for (const k of ["top", "bottom", "left", "right"] as const) s[k] = Math.max(s[k], ZONES[z][k]);
   return s;
@@ -109,15 +104,20 @@ interface MediaInfo {
   duration: number;
   hasAudio: boolean;
   vcodec: string;
+  width: number;
+  height: number;
 }
 async function probe(path: string): Promise<MediaInfo> {
-  const { stdout } = await exec(config.bin.ffprobe, ["-v", "error", "-show_entries", "format=duration:stream=codec_type,codec_name", "-of", "json", path]);
-  const j = JSON.parse(stdout) as { format?: { duration?: string }; streams?: { codec_type: string; codec_name: string }[] };
+  const { stdout } = await exec(config.bin.ffprobe, ["-v", "error", "-show_entries", "format=duration:stream=codec_type,codec_name,width,height", "-of", "json", path]);
+  const j = JSON.parse(stdout) as { format?: { duration?: string }; streams?: { codec_type: string; codec_name: string; width?: number; height?: number }[] };
   const streams = j.streams ?? [];
+  const v = streams.find((s) => s.codec_type === "video");
   return {
     duration: Number(j.format?.duration) || 0,
     hasAudio: streams.some((s) => s.codec_type === "audio"),
-    vcodec: streams.find((s) => s.codec_type === "video")?.codec_name ?? "",
+    vcodec: v?.codec_name ?? "",
+    width: v?.width ?? 0,
+    height: v?.height ?? 0,
   };
 }
 
@@ -164,6 +164,15 @@ export async function renderClip(
   const k = vertical ? 1 : 0.75;
 
   const keywords = JSON.parse(clip.keywords) as string[];
+  // Crédito logo abaixo do logo/selo quando ele fica no canto superior esquerdo (alinhados).
+  let creditY = safe.top + 20;
+  let logoInfo: MediaInfo | null = null;
+  if (spec.logo) {
+    logoInfo = await probe(assets.get(spec.logo.asset.id)!);
+    if (spec.logo.position === "top-left" && logoInfo.width) {
+      creditY = safe.top + 24 + Math.round((OUT.w * spec.logo.scale * logoInfo.height) / logoInfo.width) + 14;
+    }
+  }
   const assName = `clip-${clip.id}.ass`;
   writeFileSync(
     join(dir, assName),
@@ -173,14 +182,21 @@ export async function renderClip(
       color: spec.subtitle.color,
       highlightColor: spec.subtitle.highlight,
       maxWords: spec.subtitle.maxWords,
+      outline: spec.subtitle.outline,
+      shadow: spec.subtitle.shadow,
+      outlineColor: spec.subtitle.outlineColor,
+      active: spec.subtitle.active,
       align: subAlign,
       marginV: subMarginV,
       res: { ...OUT, k },
       bannerAvoid,
       banner: spec.banner
         ? {
-            title: clip.title, font: config.render.titleFont, color: ch.banner_color, textColor: ch.banner_text_color,
-            centerY: bannerY, centerX: OUT.w / 2, maxWidth: Math.min(960, OUT.w * 0.89), k, duration: main, seed: clip.id,
+            title: clip.title, font: spec.banner.font || config.render.titleFont, color: spec.banner.color, textColor: spec.banner.text,
+            centerY: spec.banner.style === "bar" && vertical && !split ? Math.max(bannerY, safe.top + 330) : bannerY,
+            centerX: OUT.w / 2, maxWidth: Math.min(OUT.w - safe.left - safe.right, OUT.w * 0.89), k, duration: main, seed: clip.id,
+            style: spec.banner.style, size: spec.banner.size, minTop: vertical ? safe.top + 250 : safe.top + 40, accent: spec.banner.accent, keywords, tag: spec.banner.tag,
+            tagFont: spec.credit?.font || spec.subtitle.font || config.render.font, dim: spec.banner.style === "bar", width: OUT.w, height: OUT.h,
           }
         : undefined,
       lowerThird: spec.lowerThird
@@ -192,7 +208,7 @@ export async function renderClip(
             y: split || !vertical ? OUT.h - safe.bottom - 40 : OUT.h - subMarginV - 240,
           }
         : undefined,
-      credit: spec.credit ? { text: spec.credit, x: safe.left + 20, y: safe.top + 20 } : undefined,
+      credit: spec.credit ? { ...spec.credit, x: safe.left + (spec.logo?.position === "top-left" ? 24 : 20), y: creditY } : undefined,
     }),
   );
 
@@ -231,13 +247,18 @@ export async function renderClip(
   // Recorte ampliado (ex.: 608x1080 → 1080x1920) perde nitidez; um unsharp leve recupera bordas.
   if (plan.upscale > 1.15) step("unsharp=5:5:0.7:5:5:0", "sharp");
   const zooms = clip.zoom && plan.canZoom ? emphasisTimes(words, keywords) : [];
-  if (zooms.length) {
-    const z = zooms.map((t) => `between(in_time,${t.toFixed(2)},${(t + 0.9).toFixed(2)})`).join("+");
-    step(`zoompan=z='if(${z},1.12,1)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${OUT.w}x${OUT.h}:fps=${fps}`, "zoomed");
+  // Zoom de ritmo (modelo): leve, a cada N segundos, fora das janelas de ênfase.
+  const beats: number[] = [];
+  if (spec.zoomEvery > 0 && plan.canZoom) {
+    for (let t = spec.zoomEvery; t < main - 1; t += spec.zoomEvery) if (!zooms.some((z) => Math.abs(z - t) < 1.5)) beats.push(t);
+  }
+  if (zooms.length || beats.length) {
+    const win = (ts: number[], len: number) => ts.map((t) => `between(in_time,${t.toFixed(2)},${(t + len).toFixed(2)})`).join("+") || "0";
+    step(`zoompan=z='if(${win(zooms, 0.9)},1.12,if(${win(beats, 1.6)},1.06,1))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${OUT.w}x${OUT.h}:fps=${fps}`, "zoomed");
   }
 
   // Logo / marca d'água (abaixo das legendas)
-  if (spec.logo) {
+  if (spec.logo && logoInfo) {
     const li = addInput(["-i", assets.get(spec.logo.asset.id)!]);
     const m = 24;
     const [vy, hx] = spec.logo.position.split("-");

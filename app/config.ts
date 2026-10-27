@@ -62,7 +62,8 @@ export const config = {
     fps: num("RENDER_FPS", 30),
     font: env("SUBTITLE_FONT", "Montserrat ExtraBold"),
     titleFont: env("TITLE_FONT", "Impact"), // faixa de título: fonte condensada e pesada
-    fontsDir: process.env.SUBTITLE_FONTS_DIR ?? "",
+    // Fontes das identidades (Anton, Archivo…) ficam em web/fonts: o painel e o render usam as mesmas.
+    fontsDir: process.env.SUBTITLE_FONTS_DIR || resolve(ROOT, "web/fonts"),
   },
 
   // Modelo padrão quando o canal não define o seu.

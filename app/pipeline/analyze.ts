@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config, PRICING, type Effort } from "../config.ts";
-import type { Template } from "../brand.ts";
+import { parseJson, type Brand, type Template } from "../brand.ts";
 import type { Channel, Layout } from "../db.ts";
 import { compactTranscript, type Transcript } from "./transcribe.ts";
 
@@ -19,6 +19,8 @@ export interface CutProposal {
   teaser_end: number;
   speaker_name: string;
   speaker_role: string;
+  pillar: string;
+  hashtags: string;
 }
 
 export interface Usage {
@@ -32,6 +34,20 @@ export interface Usage {
 
 // O modelo só decide o que exige julgamento. Tempos formatados, legenda social,
 // custos e configs de render são calculados em código (zero tokens de saída gastos nisso).
+const pillarsOf = (ch: Channel) => (parseJson<Brand>(ch.brand, {}).pillars ?? []).filter(Boolean);
+
+/** Schema da resposta; o pilar só existe (e só aceita os valores do canal) quando o canal define pilares. */
+function outputSchema(pillars: string[]) {
+  const s = structuredClone(OUTPUT_SCHEMA) as unknown as {
+    properties: { cortes: { items: { required: string[]; properties: Record<string, unknown> } } };
+  };
+  if (pillars.length) {
+    s.properties.cortes.items.properties.pilar = { type: "string", enum: pillars };
+    s.properties.cortes.items.required.push("pilar");
+  }
+  return s;
+}
+
 const OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -44,7 +60,7 @@ const OUTPUT_SCHEMA = {
         additionalProperties: false,
         required: [
           "start_seconds", "end_seconds", "score_viral", "gancho_impacto", "titulo_corte", "layout_type", "zoom_on_emphasis", "palavras_destaque",
-          "teaser_start_seconds", "teaser_end_seconds", "falante_nome", "falante_cargo",
+          "teaser_start_seconds", "teaser_end_seconds", "falante_nome", "falante_cargo", "hashtags_assunto",
         ],
         properties: {
           start_seconds: { type: "number" },
@@ -59,6 +75,7 @@ const OUTPUT_SCHEMA = {
           teaser_end_seconds: { type: "number" },
           falante_nome: { type: "string" },
           falante_cargo: { type: "string" },
+          hashtags_assunto: { type: "array", items: { type: "string" } },
         },
       },
     },
@@ -100,12 +117,15 @@ Para cada corte:
 - start_seconds / end_seconds: use os segundos das linhas; o sistema ajusta ao limite exato da frase.
 - score_viral: 0 a 100, calibrado (90+ só para trechos excepcionais).
 - gancho_impacto: uma frase explicando por que o trecho prende a atenção.
-- titulo_corte: título em CAIXA ALTA, até 70 caracteres, chamativo mas fiel ao que é dito (sem inventar fatos).
+${ch.title_style === "sentence"
+    ? "- titulo_corte: o gancho reescrito como título em caixa normal (maiúscula só no início e em nomes próprios, nunca o título inteiro em caixa alta), até 60 caracteres, no máximo um emoji, fiel ao que é dito (sem inventar fatos)."
+    : "- titulo_corte: título em CAIXA ALTA, até 70 caracteres, chamativo mas fiel ao que é dito (sem inventar fatos)."}
 ${layoutRule}
 - zoom_on_emphasis: true quando há picos de ênfase que merecem punch-in.
 - palavras_destaque: 4 a 10 palavras exatamente como aparecem na transcrição, as de maior impacto (para destacar na legenda).
 - teaser_start_seconds / teaser_end_seconds: a frase mais forte DENTRO do corte, de 2 a 6 segundos, que funcionaria como chamada repetida no início do vídeo. Use 0 e 0 se nenhuma frase se sustenta sozinha.
-- falante_nome / falante_cargo: nome e cargo/função de quem fala no trecho, só se forem ditos explicitamente na transcrição ou no título do vídeo (ex.: "Fernando Haddad" / "Ministro da Fazenda"). Nunca deduza nem invente; na dúvida, use "".
+- hashtags_assunto: 1 ou 2 hashtags do assunto específico do corte, com #, minúsculas e sem acento (ex.: "#hipertrofia").
+${pillarsOf(ch).length ? `- pilar: o pilar de conteúdo do corte, um destes: ${pillarsOf(ch).join(", ")}.\n` : ""}- falante_nome / falante_cargo: nome e cargo/função de quem fala no trecho, só se forem ditos explicitamente na transcrição ou no título do vídeo (ex.: "Fernando Haddad" / "Ministro da Fazenda"). Nunca deduza nem invente; na dúvida, use "".
 
 Retorne até ${ch.clips_target} cortes, do maior para o menor score. Se o vídeo não tiver material bom, retorne menos.`;
 }
@@ -120,7 +140,7 @@ export async function analyze(ch: Channel, tpl: Template | null, t: Transcript, 
       max_tokens: 32000,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-      output_config: { effort, format: { type: "json_schema", schema: OUTPUT_SCHEMA } },
+      output_config: { effort, format: { type: "json_schema", schema: outputSchema(pillarsOf(ch)) } },
       // System estável por canal → cache entre vídeos do mesmo canal.
       system: [{ type: "text", text: systemPrompt(ch, tpl), cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: `Título do vídeo: ${title}\n\n<transcricao>\n${compactTranscript(t)}\n</transcricao>` }],
@@ -147,6 +167,8 @@ export async function analyze(ch: Channel, tpl: Template | null, t: Transcript, 
       teaser_end_seconds: number;
       falante_nome: string;
       falante_cargo: string;
+      hashtags_assunto: string[];
+      pilar?: string;
     }[];
   };
 
@@ -160,13 +182,15 @@ export async function analyze(ch: Channel, tpl: Template | null, t: Transcript, 
       ...snapped,
       score: Math.max(0, Math.min(100, Math.round(c.score_viral))),
       hook: c.gancho_impacto,
-      title: c.titulo_corte.toUpperCase(),
+      title: ch.title_style === "sentence" ? c.titulo_corte.trim() : c.titulo_corte.toUpperCase(),
       layout: tpl && tpl.layout !== "auto" ? tpl.layout : c.layout_type,
       zoom: c.zoom_on_emphasis,
       keywords: c.palavras_destaque,
       ...snapTeaser(t, c.teaser_start_seconds, c.teaser_end_seconds, snapped.start_s, snapped.end_s),
       speaker_name: c.falante_nome.trim().slice(0, 60),
       speaker_role: c.falante_cargo.trim().slice(0, 80),
+      pillar: c.pilar ?? "",
+      hashtags: c.hashtags_assunto.slice(0, 2).map((h) => "#" + h.replace(/^#/, "").replace(/\s+/g, "")).join(" "),
     });
   }
   cuts.sort((a, b) => b.score - a.score);

@@ -351,3 +351,18 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
   .montage-grid { grid-template-columns: minmax(0, 1fr); }
   #pv-clip { max-width: 240px; margin: 0 auto; }
 }
+
+/* ---------- Fontes das identidades (as mesmas que o worker usa no render) ---------- */
+@font-face { font-family: "Anton"; src: url("/fonts/Anton-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Archivo SemiBold"; src: url("/fonts/Archivo-SemiBold.ttf") format("truetype"); font-display: swap; }
+
+/* ---------- Novo canal ---------- */
+#new-channel-dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: var(--radius); padding: 20px; width: min(560px, calc(100vw - 32px)); }
+#new-channel-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+#new-channel-dialog h3 { margin-top: 0; }
+
+.pv-bgwrap { position: absolute; inset: 0; transform-origin: 50% 50%; }
+.pv-bartitle { position: absolute; left: 0; right: 0; text-align: center; text-transform: uppercase; paint-order: stroke fill; }
+.pv-tag { position: absolute; transform: translateX(-50%); background: #0e0e0d; color: #fff; font-family: "Archivo SemiBold", Arial, sans-serif; letter-spacing: 3px; }
+.pv-barwrap { position: relative; display: inline-block; }
+.pv-barwrap > i { position: absolute; left: -7px; right: -7px; -webkit-text-stroke: 0; }

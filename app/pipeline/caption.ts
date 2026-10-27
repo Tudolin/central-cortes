@@ -9,9 +9,15 @@ export function timestampLink(job: Pick<Job, "video_url" | "video_id">, seconds:
   return `${job.video_url}${job.video_url.includes("?") ? "&" : "?"}t=${t}s`;
 }
 
-export function renderCaption(template: string, job: Pick<Job, "video_url" | "video_id">, title: string, startS: number): string {
+export function renderCaption(
+  template: string, job: Pick<Job, "video_url" | "video_id" | "uploader" | "title">, title: string, startS: number,
+  extra: { pillar?: string; hashtags?: string } = {},
+): string {
   const link = timestampLink(job, startS);
   return template
+    .replaceAll("{fonte}", job.uploader || job.title)
+    .replaceAll("{pilar}", extra.pillar ?? "")
+    .replaceAll("{hashtags_assunto}", extra.hashtags ?? "")
     // O template clássico "{url}?t={ts}s" gera URL inválida quando a URL já tem "?v=".
     .replace("{url_video_original}?t={timestamp_segundos}s", link)
     .replaceAll("{url_com_timestamp}", link)

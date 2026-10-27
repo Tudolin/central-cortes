@@ -137,8 +137,14 @@ addColumns("clips", {
   teaser_end: "REAL NOT NULL DEFAULT 0",
   speaker_name: "TEXT NOT NULL DEFAULT ''",
   speaker_role: "TEXT NOT NULL DEFAULT ''",
+  pillar: "TEXT NOT NULL DEFAULT ''",
+  hashtags: "TEXT NOT NULL DEFAULT ''",
 });
-addColumns("channels", { brand: "TEXT NOT NULL DEFAULT '{}'", default_template: "INTEGER NOT NULL DEFAULT 0" });
+addColumns("channels", {
+  brand: "TEXT NOT NULL DEFAULT '{}'",
+  default_template: "INTEGER NOT NULL DEFAULT 0",
+  title_style: "TEXT NOT NULL DEFAULT 'upper'", // upper = TÍTULO EM CAIXA ALTA; sentence = caixa normal
+});
 addColumns("jobs", { template_id: "INTEGER NOT NULL DEFAULT 0", uploader: "TEXT NOT NULL DEFAULT ''" });
 db.exec(`
 CREATE TABLE IF NOT EXISTS assets (
@@ -203,6 +209,7 @@ export interface Channel {
   banner_text_color: string;
   brand: string; // JSON Brand
   default_template: number;
+  title_style: string;
   created_at: string;
 }
 
@@ -263,6 +270,8 @@ export interface Clip {
   teaser_end: number;
   speaker_name: string;
   speaker_role: string;
+  pillar: string;
+  hashtags: string;
   published_at: string | null;
   updated_at: string;
 }
@@ -331,14 +340,16 @@ if (!get("SELECT 1 FROM channels LIMIT 1")) {
   );
 }
 
+addColumns("templates", { zoom_every: "REAL NOT NULL DEFAULT 0" });
+
 /** Todo canal começa com os modelos padrão (Podcast vira o padrão). */
 export function ensureTemplates(channelId: string) {
   if (get("SELECT 1 FROM templates WHERE channel_id = ?", channelId)) return;
   DEFAULT_TEMPLATES.forEach((t, i) =>
     run(
-      `INSERT INTO templates (channel_id, name, aspect, min_duration, max_duration, layout, remove_silence, hook, use_items, cta_at, sub_scale, instructions, position)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      channelId, t.name, t.aspect, t.min_duration, t.max_duration, t.layout, t.remove_silence, t.hook, t.use_items, t.cta_at, t.sub_scale, t.instructions, i,
+      `INSERT INTO templates (channel_id, name, aspect, min_duration, max_duration, layout, remove_silence, hook, use_items, cta_at, sub_scale, instructions, zoom_every, position)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      channelId, t.name, t.aspect, t.min_duration, t.max_duration, t.layout, t.remove_silence, t.hook, t.use_items, t.cta_at, t.sub_scale, t.instructions, t.zoom_every, i,
     ),
   );
   const first = get<{ id: number }>("SELECT id FROM templates WHERE channel_id = ? ORDER BY position, id LIMIT 1", channelId);

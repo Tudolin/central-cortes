@@ -50,7 +50,7 @@ export async function fetchSource(jobId: number, source: string, onProgress: (ms
         "--merge-output-format", "mp4",
         "-o", out,
         "--force-overwrites",
-        "--print", "before_dl:%(id)s\t%(duration)s\t%(webpage_url)s\t%(uploader)s\t%(title)s",
+        "--print", "before_dl:%(id)s\t%(duration)s\t%(webpage_url)s\t%(uploader_id,uploader)s\t%(title)s",
         source,
       ],
       {

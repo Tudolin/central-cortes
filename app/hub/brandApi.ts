@@ -121,7 +121,22 @@ function cleanBrand(b: Brand, channelId: string): Brand {
       font: String(b.subtitle?.font ?? "").slice(0, 80),
       size: num(b.subtitle?.size, 40, 160, 84),
       color: color(b.subtitle?.color) ?? "#FFFFFF",
+      outline: num(b.subtitle?.outline, 0, 20, 6),
+      shadow: num(b.subtitle?.shadow, 0, 20, 3),
+      outline_color: color(b.subtitle?.outline_color) ?? "#000000",
+      active: pick(b.subtitle?.active, ["color", "scale"] as const, "color"),
     },
+    banner: { style: pick(b.banner?.style, ["brush", "bar"] as const, "brush"), font: String(b.banner?.font ?? "").slice(0, 80), size: num(b.banner?.size, 60, 400, 150) },
+    credit: {
+      format: String(b.credit?.format ?? "Fonte: {fonte}").slice(0, 80) || "Fonte: {fonte}",
+      font: String(b.credit?.font ?? "").slice(0, 80),
+      color: color(b.credit?.color) ?? "#FFFFFF",
+      box: b.credit?.box !== false,
+    },
+    safe_insets: b.safe_insets && [b.safe_insets.top, b.safe_insets.bottom, b.safe_insets.left, b.safe_insets.right].every((v) => Number.isFinite(Number(v)) && String(v) !== "")
+      ? { top: num(b.safe_insets.top, 0, 800, 0), bottom: num(b.safe_insets.bottom, 0, 900, 0), left: num(b.safe_insets.left, 0, 400, 0), right: num(b.safe_insets.right, 0, 400, 0) }
+      : null,
+    pillars: Array.isArray(b.pillars) ? b.pillars.map((p) => String(p).trim().toUpperCase().slice(0, 24)).filter(Boolean).slice(0, 8) : [],
     lower_third: {
       color: color(b.lower_third?.color),
       text_color: color(b.lower_third?.text_color) ?? "#FFFFFF",
@@ -140,7 +155,7 @@ route("PUT", "/api/channels/:id/brand", (_q, _r, [id], body: Brand) => {
 
 // ---------- Modelos de corte ----------
 
-const TEMPLATE_FIELDS = ["name", "aspect", "min_duration", "max_duration", "layout", "remove_silence", "hook", "use_items", "cta_at", "sub_scale", "instructions"] as const;
+const TEMPLATE_FIELDS = ["name", "aspect", "min_duration", "max_duration", "layout", "remove_silence", "hook", "use_items", "cta_at", "sub_scale", "instructions", "zoom_every"] as const;
 
 function cleanTemplate(b: Partial<Template> & { use?: string[] }) {
   const f: Record<string, string | number> = {};
@@ -155,6 +170,7 @@ function cleanTemplate(b: Partial<Template> & { use?: string[] }) {
   if (b.cta_at != null) f.cta_at = String(b.cta_at).slice(0, 10);
   if (b.sub_scale != null) f.sub_scale = num(b.sub_scale, 0.5, 2, 1);
   if (b.instructions != null) f.instructions = String(b.instructions).slice(0, 2000);
+  if (b.zoom_every != null) f.zoom_every = num(b.zoom_every, 0, 30, 0);
   if (f.min_duration != null && f.max_duration != null && f.min_duration >= f.max_duration) throw new HttpError(400, "Duração mínima deve ser menor que a máxima");
   return f;
 }

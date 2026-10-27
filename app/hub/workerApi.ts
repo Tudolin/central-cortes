@@ -132,12 +132,12 @@ route("POST", "/api/worker/jobs/:id/clips", (_q, _r, [id], body: {
   if (get("SELECT 1 FROM clips WHERE job_id = ?", job.id)) throw new HttpError(409, "Job já tem cortes");
   body.cuts.forEach((c, i) =>
     run(
-      `INSERT INTO clips (job_id, idx, start_s, end_s, score, hook, title, caption, keywords, layout, zoom, aspect, teaser_start, teaser_end, speaker_name, speaker_role)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO clips (job_id, idx, start_s, end_s, score, hook, title, caption, keywords, layout, zoom, aspect, teaser_start, teaser_end, speaker_name, speaker_role, pillar, hashtags)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       job.id, i + 1, c.start_s, c.end_s, c.score, c.hook, c.title,
-      renderCaption(ch.caption_template, job, c.title, c.start_s),
+      renderCaption(ch.caption_template, job, c.title, c.start_s, { pillar: c.pillar, hashtags: c.hashtags }),
       JSON.stringify(c.keywords), c.layout, c.zoom ? 1 : 0, aspect,
-      c.teaser_start ?? 0, c.teaser_end ?? 0, c.speaker_name ?? "", c.speaker_role ?? "",
+      c.teaser_start ?? 0, c.teaser_end ?? 0, c.speaker_name ?? "", c.speaker_role ?? "", c.pillar ?? "", c.hashtags ?? "",
     ),
   );
   updateJob(job.id, body.cuts.length ? { status: "RENDERING", detail: "" } : { status: "DONE", detail: "IA não encontrou trechos com potencial" });

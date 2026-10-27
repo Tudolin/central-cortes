@@ -209,7 +209,7 @@ route("PATCH", "/api/clips/:id", (_q, _r, [id], body: Omit<Partial<Clip>, "overr
   if (body.speaker_role != null) f.speaker_role = String(body.speaker_role).slice(0, 80);
   if (body.caption != null) f.caption = String(body.caption);
   else if (f.title != null || f.start_s != null) {
-    f.caption = renderCaption(ch.caption_template, job, String(f.title ?? clip.title), Number(f.start_s ?? clip.start_s));
+    f.caption = renderCaption(ch.caption_template, job, String(f.title ?? clip.title), Number(f.start_s ?? clip.start_s), { pillar: clip.pillar, hashtags: clip.hashtags });
   }
   const visual = ["start_s", "end_s", "layout", "zoom", "keywords", "title", "overrides", "speaker_name", "speaker_role"].some((k) => k in f && f[k] !== (clip as any)[k]);
   if ((body.rerender || visual) && !["PUBLISHED", "PUBLISHING"].includes(clip.status)) {
@@ -277,7 +277,7 @@ const CHANNEL_FIELDS = [
   "name", "niche", "tone", "extra_instructions", "caption_template", "model", "effort", "clips_target",
   "min_duration", "max_duration", "highlight_color", "max_words_per_frame", "webhook_url",
   "schedule_slots", "publish_targets", "youtube_privacy", "youtube_category", "tiktok_mode", "tiktok_privacy",
-  "title_banner", "banner_color", "banner_text_color", "default_template",
+  "title_banner", "banner_color", "banner_text_color", "default_template", "title_style",
 ] as const;
 
 route("POST", "/api/channels", (_q, _r, _p, body: Partial<Channel>) => {
@@ -285,7 +285,7 @@ route("POST", "/api/channels", (_q, _r, _p, body: Partial<Channel>) => {
   if (!id || !body.name) throw new HttpError(400, "id e nome são obrigatórios");
   if (getChannel(id)) throw new HttpError(409, "Canal já existe");
   const base = getChannel("ideias_em_comum");
-  run("INSERT INTO channels (id, name, caption_template) VALUES (?, ?, ?)", id, body.name, body.caption_template ?? base?.caption_template ?? "🎙️ {titulo_corte}\n\n📺 {url_com_timestamp}");
+  run("INSERT INTO channels (id, name, caption_template) VALUES (?, ?, ?)", id, body.name, body.caption_template ?? "{titulo_corte}\n\n📺 Corte de: {fonte} ({url_com_timestamp})");
   ensureTemplates(id);
   return saveChannel(id, body);
 });
