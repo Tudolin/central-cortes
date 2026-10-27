@@ -81,7 +81,7 @@ async function processJob({ job, channel, hasClips, template }: Extract<Task, { 
       return;
     }
     await report({ status: "ANALYZING", detail: `${transcript.words.length} palavras` });
-    const { cuts, usage } = await analyze(channel, template, transcript, src.title);
+    const { cuts, usage } = await analyze(channel, template, transcript, src.title, progress((d) => report({ detail: d })));
     await report({ ...usage });
     await hub("POST", `/api/worker/jobs/${job.id}/clips`, { cuts });
   } catch (e) {

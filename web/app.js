@@ -61,6 +61,9 @@ async function refresh() {
 
 const byChannel = (x) => !ui.channel || x.channel_id === ui.channel;
 const jobsF = () => state.jobs.filter(byChannel);
+/** Cortes escolhidos pela IA local (Ollama) quando o Claude estava sem crédito: revisar com mais atenção. */
+const isLocalAi = (c) => (state.jobs.find((j) => j.id === c.job_id)?.model || "").startsWith("local/");
+const localTag = (c) => (isLocalAi(c) ? `<span class="tag local-ai" title="Escolhido pelo modelo local no PC (o Claude estava sem crédito). Revise com mais atenção.">IA local</span>` : "");
 const clipsF = () => state.clips.filter(byChannel);
 const channelName = (id) => state.channels.find((c) => c.id === id)?.name ?? id;
 const postsOf = (clipId) => state.posts.filter((p) => p.clip_id === clipId);
@@ -100,7 +103,7 @@ function clipCard(c) {
   return `<div class="kcard clickable" data-clip="${c.id}">
     <div class="thumb">${thumb}<div style="display:grid;gap:6px;align-content:start">
       <div class="t">${esc(c.title)}</div>
-      <div class="meta"><span class="score">${c.score}</span>${hms(c.end_s - c.start_s)}<span class="tag">${esc(c.layout_used || c.layout)}</span></div>
+      <div class="meta"><span class="score">${c.score}</span>${hms(c.end_s - c.start_s)}<span class="tag">${esc(c.layout_used || c.layout)}</span>${localTag(c)}</div>
       ${c.status === "SCHEDULED" ? `<div class="meta">🗓 ${when(c.scheduled_at)}${c.schedule_locked ? " 🔒" : ""}</div>` : ""}
       ${c.status === "PUBLISHING" ? `<div class="detail"><span class="spin"></span> publicando…</div>` : ""}
       ${posts.length && c.status === "PUBLISHED" ? `<div class="meta">${posts.map((p) => `<span class="tag ${p.status === "FAILED" ? "bad" : ""}">${PLATFORM[p.platform]}${p.status === "INBOX" ? " (rascunho)" : ""}</span>`).join("")}</div>` : ""}
@@ -389,7 +392,7 @@ function renderStudioMain() {
       </div>
     </div>
     <div class="editor">
-      <div class="status-line"><span class="score">${fresh.score}</span><span class="tag">${esc(fresh.status)}</span>
+      <div class="status-line"><span class="score">${fresh.score}</span><span class="tag">${esc(fresh.status)}</span>${localTag(fresh)}
         <span class="muted">${esc(fresh.video_title)}</span>
         <a class="muted" href="/api/jobs/${fresh.job_id}/result" target="_blank">JSON do job</a></div>
       <h2>${esc(fresh.title)}</h2>
@@ -1296,7 +1299,7 @@ function renderCosts() {
     <div class="card"><table><thead><tr><th>#</th><th>Vídeo</th><th>Modelo</th><th class="n">Duração</th><th class="n">Input</th><th class="n">Output</th><th class="n">Cortes</th><th class="n">Custo</th><th class="n">Custo/corte</th></tr></thead><tbody>
       ${jobs.slice(0, 100).map((j) => {
         const n = state.clips.filter((c) => c.job_id === j.id).length;
-        return `<tr><td>${j.id}</td><td>${esc(j.title || j.source)}</td><td class="mono">${esc(j.model)}</td><td class="n">${hms(j.duration)}</td><td class="n">${fmtN(j.tokens_in + j.tokens_cache_write + j.tokens_cache_read)}</td><td class="n">${fmtN(j.tokens_out)}</td><td class="n">${n}</td><td class="n">${usd(j.cost_usd)}</td><td class="n">${usd(n ? j.cost_usd / n : 0)}</td></tr>`;
+        return `<tr><td>${j.id}</td><td>${esc(j.title || j.source)}</td><td class="mono">${j.model.startsWith("local/") ? "🖥 " + esc(j.model.slice(6)) : esc(j.model)}</td><td class="n">${hms(j.duration)}</td><td class="n">${fmtN(j.tokens_in + j.tokens_cache_write + j.tokens_cache_read)}</td><td class="n">${fmtN(j.tokens_out)}</td><td class="n">${n}</td><td class="n">${usd(j.cost_usd)}</td><td class="n">${usd(n ? j.cost_usd / n : 0)}</td></tr>`;
       }).join("")}
     </tbody></table></div>`;
 }

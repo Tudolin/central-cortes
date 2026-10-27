@@ -1,4 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { config, PRICING, type Effort } from "../config.ts";
 import { parseJson, type Brand, type Template } from "../brand.ts";
 import type { Channel, Layout } from "../db.ts";
@@ -130,7 +132,53 @@ ${pillarsOf(ch).length ? `- pilar: o pilar de conteúdo do corte, um destes: ${p
 Retorne até ${ch.clips_target} cortes, do maior para o menor score. Se o vídeo não tiver material bom, retorne menos.`;
 }
 
-export async function analyze(ch: Channel, tpl: Template | null, t: Transcript, title: string): Promise<{ cuts: CutProposal[]; usage: Usage }> {
+type Parsed = {
+  cortes: {
+    start_seconds: number;
+    end_seconds: number;
+    score_viral: number;
+    gancho_impacto: string;
+    titulo_corte: string;
+    layout_type: Layout;
+    zoom_on_emphasis: boolean;
+    palavras_destaque: string[];
+    teaser_start_seconds: number;
+    teaser_end_seconds: number;
+    falante_nome: string;
+    falante_cargo: string;
+    hashtags_assunto: string[];
+    pilar?: string;
+  }[];
+};
+
+/** Prefixo do campo model dos jobs analisados pela IA local (o painel mostra a tag "IA local"). */
+export const LOCAL_PREFIX = "local/";
+
+/** Erros do Claude que a IA local cobre: sem crédito, sem chave, limite de uso, sobrecarga. */
+function claudeUnavailable(e: unknown) {
+  const status = (e as { status?: number }).status;
+  return [401, 402, 403, 429, 529].includes(status ?? 0)
+    || /credit balance|billing|quota|api[_ ]?key|overloaded|rate.?limit/i.test((e as Error).message ?? "");
+}
+
+export async function analyze(
+  ch: Channel, tpl: Template | null, t: Transcript, title: string, onProgress?: (detail: string) => void,
+): Promise<{ cuts: CutProposal[]; usage: Usage }> {
+  if (config.localAi === "always") return analyzeLocal(ch, tpl, t, title, onProgress);
+  try {
+    return await analyzeClaude(ch, tpl, t, title);
+  } catch (e) {
+    if (config.localAi === "off" || !claudeUnavailable(e)) throw e;
+    console.warn(`[analyze] Claude indisponível (${(e as Error).message.slice(0, 120)}); usando IA local`);
+    try {
+      return await analyzeLocal(ch, tpl, t, title, onProgress);
+    } catch (le) {
+      throw new Error(`Claude indisponível (${(e as Error).message.slice(0, 150)}) e a IA local falhou: ${(le as Error).message}`);
+    }
+  }
+}
+
+async function analyzeClaude(ch: Channel, tpl: Template | null, t: Transcript, title: string): Promise<{ cuts: CutProposal[]; usage: Usage }> {
   const model = ch.model || config.defaultModel;
   const effort = (ch.effort || config.defaultEffort) as Effort;
 
@@ -153,25 +201,113 @@ export async function analyze(ch: Channel, tpl: Template | null, t: Transcript, 
   if (message.stop_reason === "max_tokens") throw new Error("Resposta da IA truncada (max_tokens)");
 
   const text = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
-  const parsed = JSON.parse(text) as {
-    cortes: {
-      start_seconds: number;
-      end_seconds: number;
-      score_viral: number;
-      gancho_impacto: string;
-      titulo_corte: string;
-      layout_type: Layout;
-      zoom_on_emphasis: boolean;
-      palavras_destaque: string[];
-      teaser_start_seconds: number;
-      teaser_end_seconds: number;
-      falante_nome: string;
-      falante_cargo: string;
-      hashtags_assunto: string[];
-      pilar?: string;
-    }[];
-  };
+  const cuts = toCuts(ch, tpl, t, JSON.parse(text) as Parsed);
 
+  const u = message.usage;
+  const served = message.model || model;
+  const usage: Usage = {
+    model: served,
+    tokens_in: u.input_tokens,
+    tokens_out: u.output_tokens,
+    tokens_cache_read: u.cache_read_input_tokens ?? 0,
+    tokens_cache_write: u.cache_creation_input_tokens ?? 0,
+    cost_usd: 0,
+  };
+  usage.cost_usd = costOf(usage);
+  return { cuts, usage };
+}
+
+// ---------- IA local (Ollama) ----------
+// Um modelo de 8B na GPU de 8 GB não comporta a transcrição de um vídeo longo de uma vez:
+// o vídeo é dividido em janelas de ~20 min (com sobreposição para não perder cortes na fronteira),
+// cada janela pede uma parte dos cortes e o resultado passa pelo mesmo ajuste de frases do Claude.
+
+const WINDOW_S = 20 * 60;
+const OVERLAP_S = 2 * 60;
+
+const ollamaUp = () => fetch(`${config.ollamaUrl}/api/version`, { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
+
+/**
+ * Sobe o servidor do Ollama se não estiver rodando. O app de bandeja do Ollama desiste antes de a
+ * detecção da GPU terminar (~10 s nesta máquina), então o worker inicia o `ollama serve` ele mesmo.
+ */
+async function ensureOllama() {
+  if (await ollamaUp()) return;
+  if (!existsSync(config.ollamaBin)) throw new Error(`Ollama não instalado (${config.ollamaBin})`);
+  spawn(config.ollamaBin, ["serve"], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    if (await ollamaUp()) return;
+  }
+  throw new Error("o servidor do Ollama não subiu em 60 s");
+}
+
+async function ollamaChat(system: string, user: string, schema: unknown) {
+  const r = await fetch(`${config.ollamaUrl}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: config.localModel,
+      stream: false,
+      think: false,
+      format: schema,
+      keep_alive: "2m", // libera a GPU logo depois (o render usa NVENC)
+      options: { num_ctx: 16384, temperature: 0.3 },
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    }),
+    signal: AbortSignal.timeout(20 * 60_000),
+  }).catch((e) => {
+    throw new Error(`Ollama não respondeu em ${config.ollamaUrl} (${(e as Error).message})`);
+  });
+  const data = (await r.json().catch(() => ({}))) as { message?: { content?: string }; error?: string; prompt_eval_count?: number; eval_count?: number };
+  if (!r.ok) throw new Error(`Ollama: ${data.error ?? `HTTP ${r.status}`}`);
+  return { text: data.message?.content ?? "", tokensIn: data.prompt_eval_count ?? 0, tokensOut: data.eval_count ?? 0 };
+}
+
+export async function analyzeLocal(
+  ch: Channel, tpl: Template | null, t: Transcript, title: string, onProgress?: (detail: string) => void,
+): Promise<{ cuts: CutProposal[]; usage: Usage }> {
+  const lines = compactTranscript(t).split("\n").filter(Boolean);
+  const total = Math.max(1, t.sentences.at(-1)?.e ?? 1);
+  const windows: string[][] = [];
+  for (let from = 0; from < total; from += WINDOW_S - OVERLAP_S) {
+    const w = lines.filter((l) => {
+      const s = Number(l.slice(0, l.indexOf("|")));
+      return s >= from && s < from + WINDOW_S;
+    });
+    if (w.length) windows.push(w);
+    if (from + WINDOW_S >= total) break;
+  }
+  const perWindow = Math.max(2, Math.ceil((ch.clips_target / windows.length) * 1.5));
+  const system = systemPrompt({ ...ch, clips_target: perWindow }, tpl)
+    + "\n\nVocê está vendo só um trecho do vídeo: use os segundos exatamente como aparecem nas linhas. Responda apenas com o JSON pedido.";
+
+  await ensureOllama();
+  const all: Parsed["cortes"] = [];
+  let tokensIn = 0, tokensOut = 0;
+  for (const [i, w] of windows.entries()) {
+    onProgress?.(`IA local (${config.localModel}): parte ${i + 1}/${windows.length}`);
+    const res = await ollamaChat(system, `Título do vídeo: ${title}\n\n<transcricao>\n${w.join("\n")}\n</transcricao>`, outputSchema(pillarsOf(ch)));
+    tokensIn += res.tokensIn;
+    tokensOut += res.tokensOut;
+    try {
+      all.push(...(JSON.parse(res.text) as Parsed).cortes);
+    } catch {
+      console.warn(`[analyze] IA local: resposta inválida na parte ${i + 1}, ignorada`);
+    }
+  }
+  // Os melhores primeiro: na sobreposição entre janelas, toCuts mantém o de maior score.
+  all.sort((a, b) => b.score_viral - a.score_viral);
+  const cuts = toCuts(ch, tpl, t, { cortes: all }).slice(0, ch.clips_target);
+  if (!cuts.length) throw new Error("a IA local não encontrou cortes utilizáveis");
+  return {
+    cuts,
+    usage: { model: LOCAL_PREFIX + config.localModel, tokens_in: tokensIn, tokens_out: tokensOut, tokens_cache_read: 0, tokens_cache_write: 0, cost_usd: 0 },
+  };
+}
+
+/** Resposta da IA → cortes ajustados aos limites de frase, sem sobreposição, do maior score para o menor. */
+function toCuts(ch: Channel, tpl: Template | null, t: Transcript, parsed: Parsed): CutProposal[] {
   const { min, max } = limits(ch, tpl);
   const cuts: CutProposal[] = [];
   for (const c of parsed.cortes) {
@@ -194,19 +330,7 @@ export async function analyze(ch: Channel, tpl: Template | null, t: Transcript, 
     });
   }
   cuts.sort((a, b) => b.score - a.score);
-
-  const u = message.usage;
-  const served = message.model || model;
-  const usage: Usage = {
-    model: served,
-    tokens_in: u.input_tokens,
-    tokens_out: u.output_tokens,
-    tokens_cache_read: u.cache_read_input_tokens ?? 0,
-    tokens_cache_write: u.cache_creation_input_tokens ?? 0,
-    cost_usd: 0,
-  };
-  usage.cost_usd = costOf(usage);
-  return { cuts, usage };
+  return cuts;
 }
 
 export function costOf(u: Omit<Usage, "cost_usd">): number {

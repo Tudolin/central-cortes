@@ -379,3 +379,6 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) { .form { grid-template-columns: minmax(0, 1fr); } }
 .robot-box { background: var(--panel); border-left: 3px solid #25f4ee; border-radius: var(--radius); padding: 10px; display: grid; gap: 8px; }
 .robot-box a { color: var(--blue); }
+
+/* Corte escolhido pela IA local (Ollama) */
+.tag.local-ai { border-color: #ff9f43; color: #ff9f43; }

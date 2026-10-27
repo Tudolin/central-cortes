@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 if (existsSync(resolve(ROOT, ".env"))) process.loadEnvFile(resolve(ROOT, ".env"));
@@ -73,6 +73,13 @@ export const config = {
   // Modelo padrão quando o canal não define o seu.
   defaultModel: env("CLAUDE_MODEL", "claude-opus-5-5"),
   defaultEffort: env("CLAUDE_EFFORT", "medium") as Effort,
+
+  // IA local (Ollama no PC do worker): assume a análise quando o Claude falha por crédito/limite.
+  // LOCAL_AI=auto (padrão) | always (nunca usa o Claude) | off.
+  localAi: env("LOCAL_AI", "auto") as "auto" | "always" | "off",
+  ollamaUrl: env("OLLAMA_URL", "http://127.0.0.1:11434"),
+  localModel: env("LOCAL_MODEL", "qwen3:8b"),
+  ollamaBin: env("OLLAMA_BIN", join(process.env.LOCALAPPDATA ?? "", "Programs/Ollama/ollama.exe")),
 
   // URL pública, Telegram e chaves de YouTube/TikTok: ver hub/settings.ts (dashboard, com .env como fallback).
 };
