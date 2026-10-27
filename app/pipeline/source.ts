@@ -18,6 +18,16 @@ export interface SourceInfo {
   duration: number;
 }
 
+const potUrl = () => {
+  if (config.ytdlpPotUrl === "off") return "";
+  if (config.ytdlpPotUrl) return config.ytdlpPotUrl;
+  try {
+    return `http://${new URL(config.hubUrl).hostname}:4416`;
+  } catch {
+    return "";
+  }
+};
+
 const isUrl = (s: string) => /^https?:\/\//i.test(s);
 
 /** Baixa (yt-dlp) ou referencia um arquivo local. Idempotente: reaproveita source.json se existir. */
@@ -42,6 +52,8 @@ export async function fetchSource(jobId: number, source: string, onProgress: (ms
         "--js-runtimes", `node:${process.execPath}`,
         ...(existsSync(config.ytdlpCookies) ? ["--cookies", config.ytdlpCookies]
           : existsSync(config.ytdlpRobotCookies) ? ["--cookies", config.ytdlpRobotCookies] : []),
+        // PO token (bgutil): o yt-dlp pede ao servidor quando o cliente do YouTube exigir; se estiver fora, segue sem.
+        ...(potUrl() ? ["--extractor-args", `youtubepot-bgutilhttp:base_url=${potUrl()}`] : []),
         "--encoding", "utf-8", // no Windows o padrão é a code page do console e quebra acentos do título
         "--retries", "10", "--fragment-retries", "10",
         "--progress", // --print implica --quiet; isto mantém o progresso para o dashboard

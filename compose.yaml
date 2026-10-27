@@ -45,3 +45,13 @@ services:
       # Mesmo caminho do hub: o upload usa o arquivo do corte direto do disco.
       - ./data/media:/app/data/media:ro
       - ./deploy/browser-unlock.sh:/custom-cont-init.d/10-unlock.sh:ro
+
+  # Gerador de PO token (bgutil) para o yt-dlp do worker: reduz o bloqueio "confirme que você não é um robô"
+  # do YouTube sem precisar de login. O worker do PC acessa pelo IP do Tailscale.
+  cortes-pot:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: cortes-pot
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${TAILSCALE_IP:-127.0.0.1}:4416:4416"

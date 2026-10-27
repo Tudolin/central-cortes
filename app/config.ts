@@ -51,6 +51,8 @@ export const config = {
   ytdlpCookies: resolve(ROOT, env("YTDLP_COOKIES", "data/youtube-cookies.txt")),
   /** Cookies do YouTube vindos do navegador do robô (hub), renovados a cada download. */
   ytdlpRobotCookies: resolve(ROOT, "data/youtube-cookies.robot.txt"),
+  /** Servidor de PO token (bgutil, container cortes-pot no notebook). Vazio = mesmo host do hub, porta 4416; "off" desliga. */
+  ytdlpPotUrl: env("YTDLP_POT_URL", ""),
   whisperModel: resolve(ROOT, env("WHISPER_MODEL", "models/ggml-large-v3-turbo-q5_0.bin")),
   whisperThreads: num("WHISPER_THREADS", 8),
   whisperLanguage: env("WHISPER_LANGUAGE", "pt"),
