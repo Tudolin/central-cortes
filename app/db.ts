@@ -211,6 +211,7 @@ export interface Channel {
   default_template: number;
   title_style: string;
   created_at: string;
+  platform_slots: string;
 }
 
 export interface Job {
@@ -280,12 +281,14 @@ export interface Post {
   id: number;
   clip_id: number;
   platform: Platform;
-  status: "OK" | "INBOX" | "FAILED";
+  status: "OK" | "INBOX" | "FAILED" | "PLANNED" | "SKIPPED";
   external_id: string;
   url: string;
   error: string;
   attempts: number;
   updated_at: string;
+  scheduled_at: string | null;
+  locked: number;
 }
 
 export const all = <T>(sql: string, ...params: SQLInputValue[]) => db.prepare(sql).all(...params) as unknown as T[];
@@ -341,6 +344,10 @@ if (!get("SELECT 1 FROM channels LIMIT 1")) {
 }
 
 addColumns("templates", { zoom_every: "REAL NOT NULL DEFAULT 0" });
+// Horários próprios por plataforma (ex.: {"youtube":"18:30"}): a plataforma ganha uma fila só dela.
+addColumns("channels", { platform_slots: "TEXT NOT NULL DEFAULT '{}'" });
+// Posts com horário próprio: PLANNED (agendado na fila da plataforma), SKIPPED (não postar nela).
+addColumns("posts", { scheduled_at: "TEXT", locked: "INTEGER NOT NULL DEFAULT 0" });
 // Histórico das métricas (uma linha por post a cada coleta): permite comparar cortes na mesma idade (ex.: 48 h).
 db.exec(`CREATE TABLE IF NOT EXISTS post_snapshots (
   post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,

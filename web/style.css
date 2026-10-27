@@ -575,3 +575,5 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
   .mo-c { min-height: 70px; }
   .mo .ev-n { font-size: 10px; }
 }
+
+.ev-post { border-left-style: double; border-left-width: 5px; }

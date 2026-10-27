@@ -60,9 +60,10 @@ export const hasFinal = (c: Clip) => existsSync(clipPath(c.job_id, c.id, "mp4"))
 function nextFinalNeeded(): Clip | undefined {
   const until = new Date(Date.now() + finalWindowH() * 3600_000).toISOString();
   const due = all<Clip>(
-    `SELECT * FROM clips WHERE status IN ('SCHEDULED','PUBLISHING','PUBLISH_FAILED') AND (scheduled_at IS NULL OR scheduled_at <= ?)
+    `SELECT * FROM clips WHERE (status IN ('SCHEDULED','PUBLISHING','PUBLISH_FAILED') AND (scheduled_at IS NULL OR scheduled_at <= ?))
+       OR id IN (SELECT clip_id FROM posts WHERE status = 'PLANNED' AND scheduled_at <= ?)
      ORDER BY scheduled_at`,
-    until,
+    until, until,
   );
   return due.find((c) => !hasFinal(c) && Date.now() - (finalRequested.get(c.id) ?? 0) > 15 * 60_000);
 }

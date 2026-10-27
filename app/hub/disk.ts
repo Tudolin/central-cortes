@@ -33,13 +33,18 @@ export const diskState = () => {
 
 function prune() {
   const low = freeGb() < LOW_GB;
+  // Cortes com post planejado (fila própria de uma plataforma) dentro da janela: o vídeo final fica.
+  const soon = new Set(all<{ clip_id: number }>(
+    "SELECT clip_id FROM posts WHERE status = 'PLANNED' AND scheduled_at <= ?",
+    new Date(Date.now() + (finalWindowH() + 12) * 3600_000).toISOString(),
+  ).map((r) => r.clip_id));
   const retention = new Date(Date.now() - (low ? 0 : config.retentionDays) * 86400_000).toISOString();
   for (const c of all<Clip>("SELECT * FROM clips")) {
     if (c.status === "REJECTED" && Date.parse(c.updated_at + "Z") < Date.now() - 2 * 86400_000) {
       removeClipFiles(c.job_id, c.id);
       continue;
     }
-    if (c.status === "PUBLISHED" && (c.published_at ?? "") < retention) {
+    if (c.status === "PUBLISHED" && (c.published_at ?? "") < retention && !soon.has(c.id)) {
       removeClipFiles(c.job_id, c.id, ["mp4", "proxy", "preview"]);
       continue;
     }
@@ -47,7 +52,7 @@ function prune() {
     if (!["PENDING_REVIEW", "RENDER_QUEUED", "RENDERING"].includes(c.status)) removeClipFiles(c.job_id, c.id, ["proxy"]);
     // Vídeo final: só fica no hub perto da hora de publicar (o PC guarda o original e reenvia quando preciso).
     const far = c.scheduled_at && Date.parse(c.scheduled_at) > Date.now() + (finalWindowH() + 12) * 3600_000 && !c.schedule_locked;
-    if (["PENDING_REVIEW", "FAILED"].includes(c.status) || (c.status === "SCHEDULED" && far)) removeClipFiles(c.job_id, c.id, ["mp4"]);
+    if (["PENDING_REVIEW", "FAILED"].includes(c.status) || (c.status === "SCHEDULED" && far && !soon.has(c.id))) removeClipFiles(c.job_id, c.id, ["mp4"]);
   }
 }
 

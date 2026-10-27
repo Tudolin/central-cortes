@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "../config.ts";
 import { settings } from "./settings.ts";
-import { all, credentialsOf, ensureTemplates, getChannel, getTemplate, getClip, getJob, run, setCredentials, updateChannel, updateClip, updateJob, type Channel, type Clip, type Job } from "../db.ts";
+import { all, credentialsOf, get, ensureTemplates, getChannel, getTemplate, getClip, getJob, run, setCredentials, updateChannel, updateClip, updateJob, type Channel, type Clip, type Job, type Post } from "../db.ts";
 import { bus } from "../events.ts";
 import { HttpError, MIME, must, route, serveFile } from "../http.ts";
 import { buildResult, renderCaption } from "../pipeline/caption.ts";
@@ -11,7 +11,7 @@ import type { Transcript } from "../pipeline/transcribe.ts";
 import { clipPath, jobMediaDir, transcriptPath } from "./media.ts";
 import { explainTikTokError, tiktokAuthUrl, tiktokConnect, tiktokCreatorInfo, tiktokRedirect, type TikTokPostSettings } from "./publish/tiktok.ts";
 import { youtubeAuthUrl, youtubeConnect, youtubeRedirect } from "./publish/youtube.ts";
-import { approve, needsTikTokChoices, rebalance, reject } from "./schedule.ts";
+import { approve, needsTikTokChoices, rebalance, reject, tick } from "./schedule.ts";
 import { collectMetrics, metricsState } from "./metrics.ts";
 import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
 import { chatCandidates, telegramBotInfo, telegramTest, tg } from "./telegram.ts";
@@ -37,7 +37,7 @@ route("GET", "/api/state", () => {
     `SELECT c.*, j.channel_id, j.title AS video_title FROM clips c JOIN jobs j ON j.id = c.job_id
      WHERE c.status != 'REJECTED' ORDER BY c.id DESC LIMIT 500`,
   );
-  const posts = all(`SELECT p.clip_id, p.platform, p.status, p.url, p.error, p.views, p.likes, p.comments, p.shares, p.saves, p.metrics_at,
+  const posts = all(`SELECT p.clip_id, p.platform, p.status, p.url, p.error, p.id, p.scheduled_at, p.locked, p.views, p.likes, p.comments, p.shares, p.saves, p.metrics_at,
       (SELECT s.views FROM post_snapshots s WHERE s.post_id = p.id
          AND julianday(s.at) - julianday(c.published_at) BETWEEN 1.5 AND 2.5
        ORDER BY abs(julianday(s.at) - julianday(c.published_at) - 2) LIMIT 1) AS views48
@@ -279,6 +279,27 @@ route("GET", "/api/clips/:id/tiktok", async (_q, _r, [id]) => {
   }
 });
 
+/**
+ * Post da fila própria de uma plataforma: muda o horário (trava), "now" publica já, null volta ao automático,
+ * skip = não postar este corte nessa plataforma.
+ */
+route("POST", "/api/posts/:id/move", (_q, _r, [id], body: { when?: string | null; skip?: boolean }) => {
+  const p = get<Post & { channel_id: string }>(
+    "SELECT p.*, j.channel_id FROM posts p JOIN clips c ON c.id = p.clip_id JOIN jobs j ON j.id = c.job_id WHERE p.id = ?", +id,
+  );
+  if (!p || p.status !== "PLANNED") throw new HttpError(409, "Post não está agendado");
+  if (body.skip) run("UPDATE posts SET status = 'SKIPPED', locked = 0 WHERE id = ?", p.id);
+  else if (body.when) {
+    const at = body.when === "now" ? new Date(Date.now() + 5_000) : new Date(body.when);
+    if (Number.isNaN(at.getTime())) throw new HttpError(400, "Horário inválido");
+    run("UPDATE posts SET scheduled_at = ?, locked = 1 WHERE id = ?", at.toISOString(), p.id);
+  } else run("UPDATE posts SET locked = 0 WHERE id = ?", p.id);
+  rebalance(p.channel_id);
+  bus.emit("change", { table: "posts" });
+  if (body.when === "now") void tick();
+  return { ok: true };
+});
+
 /** Redistribui os agendados (não travados) do canal nos próximos horários livres. */
 route("POST", "/api/channels/:id/rebalance", (_q, _r, [id]) => {
   must(getChannel(id), "Canal");
@@ -317,7 +338,7 @@ route("POST", "/api/clips/:id/rerender", (_q, _r, [id]) => {
 const CHANNEL_FIELDS = [
   "name", "niche", "tone", "extra_instructions", "caption_template", "model", "effort", "clips_target",
   "min_duration", "max_duration", "highlight_color", "max_words_per_frame", "webhook_url",
-  "schedule_slots", "publish_targets", "youtube_privacy", "youtube_category", "tiktok_mode", "tiktok_privacy",
+  "schedule_slots", "platform_slots", "publish_targets", "youtube_privacy", "youtube_category", "tiktok_mode", "tiktok_privacy",
   "title_banner", "banner_color", "banner_text_color", "default_template", "title_style",
 ] as const;
 
@@ -340,6 +361,7 @@ function saveChannel(id: string, body: Partial<Channel> & { credentials?: unknow
   const f: Record<string, string | number> = {};
   for (const k of CHANNEL_FIELDS) if (body[k] != null) f[k] = body[k] as string | number;
   if (f.publish_targets != null && typeof f.publish_targets !== "string") f.publish_targets = JSON.stringify(f.publish_targets);
+  if (f.platform_slots != null && typeof f.platform_slots !== "string") f.platform_slots = JSON.stringify(f.platform_slots);
   // Credenciais extras são write-only: valor vazio remove a chave, ausente mantém.
   if (body.credentials && typeof body.credentials === "object") setCredentials(id, body.credentials as Record<string, string>);
   updateChannel(id, f);

@@ -17,9 +17,51 @@ const BACKOFF_MIN = [5, 20, 60];
 
 export const targetsOf = (ch: Channel) => (JSON.parse(ch.publish_targets || "[]") as Platform[]).filter((p) => p in PUBLISHERS);
 
-/** Horários "HH:MM" do canal a partir de agora, no fuso do servidor (TZ). */
-function upcomingSlots(ch: Channel, from: Date, days = 30): Date[] {
-  const slots = ch.schedule_slots.split(/[,\s]+/).map((s) => s.match(/^(\d{1,2}):(\d{2})$/)).filter((m): m is RegExpMatchArray => !!m);
+/** Dois cortes do mesmo vídeo de origem ficam a pelo menos 3 dias de distância na mesma plataforma. */
+const SOURCE_GAP_MS = 3 * 86400_000;
+/** A fila própria de uma plataforma só considera cortes aprovados nos últimos 14 dias. */
+const PLATFORM_LOOKBACK_MS = 14 * 86400_000;
+
+const slotList = (s: string) => s.split(/[,\s]+/).filter((x) => /^\d{1,2}:\d{2}$/.test(x));
+
+/**
+ * Horários próprios por plataforma (ex.: YouTube 1x/dia enquanto o TikTok segue 3x/dia).
+ * Pelo menos uma plataforma segue os horários do canal: é ela que marca o corte como publicado.
+ */
+export function ownSlots(ch: Channel): Partial<Record<Platform, string>> {
+  const conf = JSON.parse(ch.platform_slots || "{}") as Record<string, string>;
+  const targets = targetsOf(ch);
+  const out: Partial<Record<Platform, string>> = {};
+  for (const p of targets) if (slotList(conf[p] ?? "").length) out[p] = slotList(conf[p]).join(",");
+  return Object.keys(out).length >= targets.length ? {} : out;
+}
+export const mainTargets = (ch: Channel) => targetsOf(ch).filter((p) => !(p in ownSlots(ch)));
+
+/** "YYYY-MM-DD HH:MM:SS" (datetime do SQLite, UTC) ou ISO → ms. */
+const ms = (s: string) => Date.parse(s.includes("T") ? s : s.replace(" ", "T") + "Z");
+
+/**
+ * Distribui itens (do melhor para o pior) nos horários livres, sem pôr dois cortes do mesmo vídeo
+ * a menos de 3 dias um do outro. Se nenhum horário respeitar o intervalo, usa o primeiro livre.
+ */
+function spread<T extends { src: string }>(items: T[], slots: string[], fixed: { src: string; t: number }[]) {
+  const used = new Set<string>();
+  const placed = [...fixed];
+  const out = new Map<T, string>();
+  const clash = (src: string, t: number) => placed.some((p) => p.src === src && Math.abs(p.t - t) < SOURCE_GAP_MS);
+  for (const it of items) {
+    const slot = slots.find((s) => !used.has(s) && !clash(it.src, Date.parse(s))) ?? slots.find((s) => !used.has(s));
+    if (!slot) continue;
+    used.add(slot);
+    placed.push({ src: it.src, t: Date.parse(slot) });
+    out.set(it, slot);
+  }
+  return out;
+}
+
+/** Horários "HH:MM" a partir de agora, no fuso do servidor (TZ). */
+function upcomingSlots(ch: Channel, from: Date, days = 30, slotStr = ch.schedule_slots): Date[] {
+  const slots = slotStr.split(/[,\s]+/).map((s) => s.match(/^(\d{1,2}):(\d{2})$/)).filter((m): m is RegExpMatchArray => !!m);
   const out: Date[] = [];
   for (let d = 0; d < days; d++) {
     for (const [, h, m] of slots) {
@@ -39,21 +81,86 @@ function upcomingSlots(ch: Channel, from: Date, days = 30): Date[] {
 export function rebalance(channelId: string) {
   const ch = getChannel(channelId);
   if (!ch) return;
-  const scheduled = all<Clip & { channel_id: string }>(
-    `SELECT c.* FROM clips c JOIN jobs j ON j.id = c.job_id WHERE j.channel_id = ? AND c.status = 'SCHEDULED' AND c.publish_attempts = 0`,
+  const SRC = "COALESCE(NULLIF(j.video_id, ''), j.source)";
+  const scheduled = all<Clip & { src: string }>(
+    `SELECT c.*, ${SRC} AS src FROM clips c JOIN jobs j ON j.id = c.job_id WHERE j.channel_id = ? AND c.status = 'SCHEDULED'`,
     channelId,
   );
-  const taken = new Set(scheduled.filter((c) => c.schedule_locked).map((c) => c.scheduled_at));
-  // Quantos dias de horários forem necessários para todos os aprovados (30 dias não bastavam com fila grande:
-  // o excedente caía no "1 por hora" e saía tudo no mesmo dia).
-  const perDay = Math.max(1, ch.schedule_slots.split(/[,\s]+/).filter((s) => /^\d{1,2}:\d{2}$/.test(s)).length);
-  const days = Math.max(30, Math.ceil(scheduled.length / perDay) + 3);
+  // Fixos: travados à mão, em nova tentativa e publicados nos últimos 3 dias (contam para o intervalo por vídeo).
+  const fixedClips = scheduled.filter((c) => c.schedule_locked || c.publish_attempts > 0);
+  const recent = all<{ src: string; published_at: string }>(
+    `SELECT ${SRC} AS src, c.published_at FROM clips c JOIN jobs j ON j.id = c.job_id
+     WHERE j.channel_id = ? AND c.status IN ('PUBLISHED', 'PUBLISHING') AND c.published_at > ?`,
+    channelId, new Date(Date.now() - SOURCE_GAP_MS).toISOString(),
+  );
+  const fixed = [
+    ...fixedClips.filter((c) => c.scheduled_at).map((c) => ({ src: c.src, t: Date.parse(c.scheduled_at!) })),
+    ...recent.map((r) => ({ src: r.src, t: Date.parse(r.published_at) })),
+  ];
+  const taken = new Set(fixedClips.map((c) => c.scheduled_at));
+  const queue = scheduled.filter((c) => !c.schedule_locked && !c.publish_attempts).sort((a, b) => b.score - a.score || a.id - b.id);
+  // Horizonte com folga para todos os aprovados mesmo respeitando o intervalo por vídeo
+  // (horizonte fixo de 30 dias jogava o excedente no "1 por hora", tudo no mesmo dia).
+  const perDay = Math.max(1, slotList(ch.schedule_slots).length);
+  const days = Math.max(45, Math.ceil(queue.length / perDay) * 2 + 7);
   const free = upcomingSlots(ch, new Date(), days).map((d) => d.toISOString()).filter((s) => !taken.has(s));
-  const queue = scheduled.filter((c) => !c.schedule_locked).sort((a, b) => b.score - a.score || a.id - b.id);
+  const plan = spread(queue, free, fixed);
   queue.forEach((c, i) => {
-    const slot = free[i] ?? new Date(Date.now() + (i + 1) * 3600_000).toISOString(); // canal sem horários: 1/h
+    const slot = plan.get(c) ?? new Date(Date.now() + (i + 1) * 3600_000).toISOString(); // canal sem horários: 1/h
     if (c.scheduled_at !== slot) updateClip(c.id, { scheduled_at: slot });
   });
+
+  // Filas próprias por plataforma (ex.: YouTube 1x/dia). Plataformas sem fila própria perdem os planejados.
+  const own = ownSlots(ch);
+  for (const p of targetsOf(ch)) if (!(p in own)) dropPlanned(ch.id, p, true);
+  for (const [p, slots] of Object.entries(own) as [Platform, string][]) planPlatform(ch, p, slots);
+}
+
+function dropPlanned(channelId: string, platform: Platform, includeLocked: boolean) {
+  run(
+    `DELETE FROM posts WHERE platform = ? AND status = 'PLANNED' ${includeLocked ? "" : "AND locked = 0"}
+       AND clip_id IN (SELECT c.id FROM clips c JOIN jobs j ON j.id = c.job_id WHERE j.channel_id = ?)`,
+    platform, channelId,
+  );
+}
+
+/**
+ * Fila própria da plataforma: cada horário dela recebe o melhor corte aprovado (últimos 14 dias) que ainda
+ * não foi para lá, respeitando o intervalo de 3 dias por vídeo de origem. Os posts ficam como PLANNED.
+ */
+function planPlatform(ch: Channel, platform: Platform, slotStr: string) {
+  // Planejados de cortes que deixaram de estar aprovados (rejeitados, de volta à revisão) saem, mesmo travados.
+  run(
+    `DELETE FROM posts WHERE status = 'PLANNED' AND clip_id IN (SELECT id FROM clips WHERE status NOT IN ('SCHEDULED', 'PUBLISHING', 'PUBLISHED'))`,
+  );
+  const SRC = "COALESCE(NULLIF(j.video_id, ''), j.source)";
+  const allRows = all<{ id: number; clip_id: number; status: string; locked: number; attempts: number; at: string | null; src: string }>(
+    `SELECT p.id, p.clip_id, p.status, p.locked, p.attempts, COALESCE(p.scheduled_at, p.updated_at) AS at, ${SRC} AS src
+     FROM posts p JOIN clips c ON c.id = p.clip_id JOIN jobs j ON j.id = c.job_id WHERE j.channel_id = ? AND p.platform = ?`,
+    ch.id, platform,
+  );
+  // Planejados automáticos (sem trava, sem tentativa) são refeitos; os demais ficam como estão.
+  const replan = new Map(allRows.filter((r) => r.status === "PLANNED" && !r.locked && !r.attempts).map((r) => [r.clip_id, r]));
+  const rows = allRows.filter((r) => !replan.has(r.clip_id));
+  const has = new Set(rows.map((r) => r.clip_id));
+  const fixed = rows.filter((r) => r.at && !["FAILED", "SKIPPED"].includes(r.status)).map((r) => ({ src: r.src, t: ms(r.at!) }));
+  const taken = new Set(rows.filter((r) => r.status === "PLANNED" && r.at).map((r) => new Date(ms(r.at!)).toISOString()));
+  const candidates = all<Clip & { src: string }>(
+    `SELECT c.*, ${SRC} AS src FROM clips c JOIN jobs j ON j.id = c.job_id
+     WHERE j.channel_id = ? AND c.status IN ('SCHEDULED', 'PUBLISHING', 'PUBLISHED') AND c.approved_at > ?`,
+    ch.id, new Date(Date.now() - PLATFORM_LOOKBACK_MS).toISOString(),
+  ).filter((c) => !has.has(c.id)).sort((a, b) => b.score - a.score || a.id - b.id);
+  const free = upcomingSlots(ch, new Date(), 30, slotStr).map((d) => d.toISOString()).filter((s) => !taken.has(s));
+  // Atualiza no lugar (o id do post não muda: o painel pode estar com ele aberto), cria os novos, apaga os que saíram.
+  const plan = spread(candidates, free, fixed);
+  for (const [c, slot] of plan) {
+    const cur = replan.get(c.id);
+    if (cur) {
+      if (cur.at !== slot) run("UPDATE posts SET scheduled_at = ? WHERE id = ?", slot, cur.id);
+      replan.delete(c.id);
+    } else run("INSERT INTO posts (clip_id, platform, status, scheduled_at) VALUES (?, ?, 'PLANNED', ?)", c.id, platform, slot);
+  }
+  for (const r of replan.values()) run("DELETE FROM posts WHERE id = ?", r.id);
 }
 
 /** Aprovação vinda do dashboard ou do Telegram. `when` = horário manual (trava) ou "now". */
@@ -113,8 +220,8 @@ async function publishClip(clip: Clip) {
   const errors: string[] = [];
   if (!existsSync(file)) errors.push("arquivo do corte não está no hub");
   else {
-    for (const platform of targetsOf(ch)) {
-      const done = get<Post>("SELECT * FROM posts WHERE clip_id = ? AND platform = ? AND status != 'FAILED'", clip.id, platform);
+    for (const platform of mainTargets(ch)) {
+      const done = get<Post>("SELECT * FROM posts WHERE clip_id = ? AND platform = ? AND status IN ('OK', 'INBOX')", clip.id, platform);
       if (done) continue;
       try {
         const r = await PUBLISHERS[platform](ch, clip, file);
@@ -139,7 +246,7 @@ async function publishClip(clip: Clip) {
   if (!errors.length) {
     updateClip(clip.id, { status: "PUBLISHED", published_at: new Date().toISOString(), error: "" });
     await fireWebhook(ch, clip.id);
-    await tg.published(getClip(clip.id)!, all<Post>("SELECT * FROM posts WHERE clip_id = ?", clip.id));
+    await tg.published(getClip(clip.id)!, all<Post>("SELECT * FROM posts WHERE clip_id = ? AND status IN ('OK', 'INBOX')", clip.id));
     return;
   }
   const attempts = clip.publish_attempts + 1;
@@ -150,6 +257,31 @@ async function publishClip(clip: Clip) {
     const retry = new Date(Date.now() + BACKOFF_MIN[attempts - 1] * 60_000).toISOString();
     updateClip(clip.id, { status: "SCHEDULED", publish_attempts: attempts, scheduled_at: retry, error: errors.join("\n") });
   }
+}
+
+/** Post da fila própria de uma plataforma (ex.: YouTube 1x/dia). */
+async function publishPlanned(p: Post) {
+  const clip = getClip(p.clip_id)!;
+  const ch = getChannel(getJob(clip.job_id)!.channel_id)!;
+  try {
+    const r = await PUBLISHERS[p.platform](ch, clip, clipPath(clip.job_id, clip.id, "mp4"));
+    run(
+      "UPDATE posts SET status = ?, external_id = ?, url = ?, error = '', attempts = attempts + 1, updated_at = datetime('now') WHERE id = ?",
+      r.status, r.external_id, r.url, p.id,
+    );
+    await tg.published(clip, [get<Post>("SELECT * FROM posts WHERE id = ?", p.id)!]);
+  } catch (e) {
+    const msg = (e as Error).message.slice(0, 1000);
+    const attempts = p.attempts + 1;
+    if (attempts > BACKOFF_MIN.length) {
+      run("UPDATE posts SET status = 'FAILED', error = ?, attempts = ?, updated_at = datetime('now') WHERE id = ?", msg, attempts, p.id);
+      await tg.publishFailed(clip, [`${p.platform}: ${msg}`]);
+    } else {
+      const retry = new Date(Date.now() + BACKOFF_MIN[attempts - 1] * 60_000).toISOString();
+      run("UPDATE posts SET error = ?, attempts = ?, scheduled_at = ? WHERE id = ?", msg, attempts, retry, p.id);
+    }
+  }
+  bus.emit("change", { table: "posts" });
 }
 
 async function fireWebhook(ch: Channel, clipId: number) {
@@ -217,7 +349,12 @@ export async function tick() {
        WHERE c.status = 'SCHEDULED' AND c.schedule_locked = 0 AND c.publish_attempts = 0 AND c.scheduled_at < ?`,
       new Date(Date.now() - 2 * 3600_000).toISOString(),
     );
-    for (const ch of new Set(stale.map((c) => c.channel_id))) rebalance(ch);
+    const stalePosts = all<{ channel_id: string }>(
+      `SELECT DISTINCT j.channel_id FROM posts p JOIN clips c ON c.id = p.clip_id JOIN jobs j ON j.id = c.job_id
+       WHERE p.status = 'PLANNED' AND p.locked = 0 AND p.attempts = 0 AND p.scheduled_at < ?`,
+      new Date(Date.now() - 2 * 3600_000).toISOString(),
+    );
+    for (const ch of new Set([...stale.map((c) => c.channel_id), ...stalePosts.map((p) => p.channel_id)])) rebalance(ch);
     warnWorkerOffline();
     // Um por vez: respeita rate limits das plataformas e o upload lento do notebook.
     const waiting = new Set<number>();
@@ -232,6 +369,12 @@ export async function tick() {
         continue;
       }
       await publishClip(due);
+    }
+    for (const p of all<Post & { job_id: number }>(
+      "SELECT p.*, c.job_id FROM posts p JOIN clips c ON c.id = p.clip_id WHERE p.status = 'PLANNED' AND p.scheduled_at <= ? ORDER BY p.scheduled_at",
+      new Date().toISOString(),
+    )) {
+      if (existsSync(clipPath(p.job_id, p.clip_id, "mp4"))) await publishPlanned(p);
     }
   } catch (e) {
     console.error("[agenda]", e);

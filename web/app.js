@@ -67,7 +67,15 @@ const isLocalAi = (c) => (state.jobs.find((j) => j.id === c.job_id)?.model || ""
 const localTag = (c) => (isLocalAi(c) ? `<span class="tag local-ai" title="Escolhido pelo modelo local no PC (o Claude estava sem crédito). Revise com mais atenção.">IA local</span>` : "");
 const clipsF = () => state.clips.filter(byChannel);
 const channelName = (id) => state.channels.find((c) => c.id === id)?.name ?? id;
-const postsOf = (clipId) => state.posts.filter((p) => p.clip_id === clipId);
+const postsOf = (clipId) => state.posts.filter((p) => p.clip_id === clipId && !["PLANNED", "SKIPPED"].includes(p.status));
+/** Plataformas com fila própria no canal (ex.: { youtube: "18:30" }) e as que seguem os horários do canal. */
+const ownSlotsOf = (ch) => {
+  const conf = JSON.parse(ch?.platform_slots || "{}"), targets = JSON.parse(ch?.publish_targets || "[]");
+  const own = Object.fromEntries(targets.filter((p) => (conf[p] || "").trim()).map((p) => [p, conf[p].trim()]));
+  return Object.keys(own).length >= targets.length ? {} : own;
+};
+const mainTargetsOf = (ch) => JSON.parse(ch?.publish_targets || "[]").filter((p) => !(p in ownSlotsOf(ch)));
+const PICON = { youtube: "▶", tiktok: "♪" };
 
 // ---------------- Pipeline / Kanban ----------------
 
@@ -698,6 +706,7 @@ const CH_FIELDS = [
   ["caption_template", "Template de legenda social — {titulo_corte} {url_com_timestamp} {url_video_original} {timestamp_segundos} {fonte} {titulo_video} {pilar} {hashtags_assunto}", { area: true, full: true, rows: 10 }],
   ["h", "Agenda e publicação"],
   ["schedule_slots", "Horários diários (HH:MM separados por vírgula)", { full: true }],
+  ["platform_slots_youtube", "Horários só do YouTube (vazio = os mesmos acima). Com horários próprios, o YouTube recebe os melhores cortes aprovados, um por horário", { full: true }],
   ["publish_targets", "Publicar em", { targets: true, full: true }],
   ["youtube_privacy", "YouTube: visibilidade", { select: ["public", "unlisted", "private"] }],
   ["youtube_category", "YouTube: categoria", { select: [["25", "Notícias e política"], ["22", "Pessoas e blogs"], ["24", "Entretenimento"], ["27", "Educação"], ["17", "Esportes"], ["26", "Estilo e dicas"]] }],
@@ -706,7 +715,7 @@ const CH_FIELDS = [
 ];
 
 function fieldInput(k, o, ch) {
-  const raw = ch[k] ?? "";
+  const raw = k.startsWith("platform_slots_") ? JSON.parse(ch.platform_slots || "{}")[k.slice(15)] ?? "" : ch[k] ?? "";
   if (o.targets) {
     const sel = JSON.parse(raw || "[]");
     return `<div class="checks">${Object.entries(PLATFORM).map(([p, label]) => `<label><input type="checkbox" name="target_${p}" ${sel.includes(p) ? "checked" : ""}> ${label}</label>`).join("")}</div>`;
@@ -942,6 +951,10 @@ async function saveChannelForm(e) {
   for (const [k, , o = {}] of CH_FIELDS) {
     if (k === "h") continue;
     if (o.targets) body.publish_targets = JSON.stringify(Object.keys(PLATFORM).filter((p) => fd[`target_${p}`]));
+    else if (k.startsWith("platform_slots_")) {
+      const cur = JSON.parse(state.channels.find((c) => c.id === form.dataset.for)?.platform_slots || "{}");
+      body.platform_slots = JSON.stringify({ ...cur, [k.slice(15)]: (fd[k] || "").trim() });
+    }
     else if (fd[k] !== undefined) body[k] = o.type === "number" ? Number(fd[k]) : fd[k];
   }
   if (fd.cred_key) body.credentials = { [fd.cred_key]: fd.cred_val };
@@ -1459,22 +1472,37 @@ ui.cal = { view: localStorage.getItem("calView") || "week", anchor: new Date() }
 
 /** Itens da agenda: agendados (movíveis) e publicados (histórico, fixos). */
 function calItems() {
-  return clipsF().flatMap((c) => {
+  const clips = clipsF();
+  const byId = new Map(clips.map((c) => [c.id, c]));
+  const chOf = (c) => state.channels.find((x) => x.id === c.channel_id);
+  const items = clips.flatMap((c) => {
     const at = c.status === "PUBLISHED" ? c.published_at : ["SCHEDULED", "PUBLISHING", "PUBLISH_FAILED"].includes(c.status) ? c.scheduled_at : null;
     if (!at) return [];
-    const views = postsOf(c.id).reduce((a, p) => a + (p.views || 0), 0);
-    return [{ c, at: new Date(at), movable: c.status === "SCHEDULED" || c.status === "PUBLISH_FAILED", views }];
+    const plats = mainTargetsOf(chOf(c));
+    const views = postsOf(c.id).filter((p) => plats.includes(p.platform)).reduce((a, p) => a + (p.views || 0), 0);
+    return [{ c, at: new Date(at), movable: c.status === "SCHEDULED" || c.status === "PUBLISH_FAILED", views, plats }];
   });
+  // Posts das filas próprias (ex.: YouTube 1x/dia): planejados (movíveis), publicados e com falha.
+  for (const p of state.posts) {
+    const c = byId.get(p.clip_id);
+    if (!c || !p.scheduled_at || p.status === "SKIPPED" || !(p.platform in ownSlotsOf(chOf(c)))) continue;
+    items.push({ c, post: p, at: new Date(p.scheduled_at), movable: p.status === "PLANNED", views: p.views || 0, plats: [p.platform] });
+  }
+  return items;
 }
 
 function evChip(it, compact = false) {
-  const { c } = it;
-  const cls = c.status === "PUBLISHED" ? "done" : c.status === "PUBLISH_FAILED" ? "bad" : c.status === "PUBLISHING" ? "busy" : "";
-  return `<div class="ev ${cls}" data-ev="${c.id}" ${it.movable ? 'draggable="true"' : ""} style="--c:${chColor(c.channel_id)}" title="${esc(c.title)}${!ui.channel ? " · " + esc(channelName(c.channel_id)) : ""}">
+  const { c, post } = it;
+  const cls = post
+    ? (post.status === "PLANNED" ? "" : post.status === "FAILED" ? "bad" : "done")
+    : c.status === "PUBLISHED" ? "done" : c.status === "PUBLISH_FAILED" ? "bad" : c.status === "PUBLISHING" ? "busy" : "";
+  const locked = post ? post.locked : c.schedule_locked;
+  const icons = (it.plats || []).map((p) => PICON[p]).join("");
+  return `<div class="ev ${cls}${post ? " ev-post" : ""}" ${post ? `data-post="${post.id}"` : `data-ev="${c.id}"`} ${it.movable ? 'draggable="true"' : ""} style="--c:${chColor(c.channel_id)}" title="${icons} ${esc(c.title)}${!ui.channel ? " · " + esc(channelName(c.channel_id)) : ""}">
     ${!compact && c.rendered_at ? `<img src="/media/clip/${c.id}.jpg?v=${encodeURIComponent(c.rendered_at)}" alt="" loading="lazy">` : ""}
     <span class="ev-b">${compact
-      ? `<span class="ev-n"><b>${hhmm(it.at)}${c.schedule_locked && it.movable ? "🔒" : ""}</b>${esc(c.title)}</span>`
-      : `<span class="ev-t">${hhmm(it.at)}${c.schedule_locked && it.movable ? " 🔒" : ""}${c.status === "PUBLISHED" && it.views ? ` · ${kfmt(it.views)} views` : ""}</span><span class="ev-n">${esc(c.title)}</span>`}</span>
+      ? `<span class="ev-n"><b>${icons} ${hhmm(it.at)}${locked && it.movable ? "🔒" : ""}</b>${esc(c.title)}</span>`
+      : `<span class="ev-t">${icons} ${hhmm(it.at)}${locked && it.movable ? " 🔒" : ""}${!it.movable && it.views ? ` · ${kfmt(it.views)} views` : ""}</span><span class="ev-n">${esc(c.title)}</span>`}</span>
   </div>`;
 }
 
@@ -1482,7 +1510,8 @@ function renderAgenda() {
   const { view } = ui.cal;
   const items = calItems();
   const now = new Date();
-  const slots = ui.channel ? (state.channels.find((c) => c.id === ui.channel)?.schedule_slots || "").split(/[,\s]+/).filter(Boolean) : [];
+  const selCh = state.channels.find((c) => c.id === ui.channel);
+  const slots = selCh ? [selCh.schedule_slots, ...Object.values(ownSlotsOf(selCh))].join(",").split(/[,\s]+/).filter(Boolean) : [];
   let label, body;
 
   if (view === "week") {
@@ -1526,7 +1555,7 @@ function renderAgenda() {
     body = `<div class="mo">${cells}</div>`;
   }
 
-  const upcoming = items.filter((it) => it.movable && it.at >= now).sort((a, b) => a.at - b.at);
+  const upcoming = items.filter((it) => it.movable && !it.post && it.at >= now).sort((a, b) => a.at - b.at);
   const last = upcoming.at(-1);
   $("#agenda").innerHTML = `
     <div class="cal-bar">
@@ -1535,6 +1564,7 @@ function renderAgenda() {
       <div class="seg cal-view"><button data-cal-view="week" class="${view === "week" ? "active" : ""}">Semana</button><button data-cal-view="month" class="${view === "month" ? "active" : ""}">Mês</button></div>
       ${ui.channel ? `<button class="btn small" data-cal-rebalance title="Reorganiza nos horários do canal os cortes que não foram movidos à mão (🔒 ficam onde estão)">Redistribuir</button>` : ""}
     </div>
+    ${selCh && Object.keys(ownSlotsOf(selCh)).length ? `<p class="muted cal-sub">${Object.entries(ownSlotsOf(selCh)).map(([p, s]) => `${PICON[p]} ${PLATFORM[p].slice(2)}: fila própria às ${esc(s)}`).join(" · ")} · ${mainTargetsOf(selCh).map((p) => PICON[p] + " " + PLATFORM[p].slice(2)).join(", ")}: ${esc(selCh.schedule_slots)}</p>` : ""}
     <p class="muted cal-sub">${upcoming.length} agendado${upcoming.length === 1 ? "" : "s"}${last ? ` · fila até ${last.at.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}` : ""} · arraste um corte para outro horário ou clique nele para ajustar.${ui.channel ? " As faixas marcadas são os horários do canal." : ""}</p>
     ${!ui.channel ? `<div class="cal-legend">${state.channels.map((c) => `<span><i style="background:${chColor(c.id)}"></i>${esc(c.name)}</span>`).join("")}</div>` : ""}
     ${body}`;
@@ -1560,6 +1590,35 @@ function openEvDialog(id) {
       <button class="btn" value="cancel" formnovalidate>Fechar</button>
     </div></form>`;
   dlg.showModal();
+}
+
+function openPostDialog(postId) {
+  const p = state.posts.find((x) => x.id === postId);
+  const c = p && state.clips.find((x) => x.id === p.clip_id);
+  if (!c) return;
+  const planned = p.status === "PLANNED";
+  const dlg = $("#ev-dialog");
+  dlg.innerHTML = `<form method="dialog" class="ev-dlg">
+    <div class="ev-dlg-top">${c.rendered_at ? `<img src="/media/clip/${c.id}.jpg?v=${encodeURIComponent(c.rendered_at)}" alt="">` : ""}
+      <div><b>${esc(c.title)}</b><div class="muted" style="font-size:12px;margin-top:4px">${PLATFORM[p.platform]} · ${esc(channelName(c.channel_id))} · ${when(p.scheduled_at)}${p.locked ? " · 🔒 horário fixado à mão" : ""}${planned ? "" : " · " + (p.status === "FAILED" ? "falhou" : "publicado")}</div>
+      ${p.error ? `<div style="margin-top:6px;font-size:12px;color:var(--red)">${esc(p.error)}</div>` : ""}</div></div>
+    ${planned ? `<label>Horário no ${PLATFORM[p.platform].slice(2)} <input type="datetime-local" name="at" value="${localInput(new Date(p.scheduled_at))}" step="300"></label>` : ""}
+    <div class="actions">
+      ${planned ? `<button class="btn primary" data-post-act="save" data-id="${p.id}">Salvar horário</button>` : ""}
+      ${planned && p.locked ? `<button class="btn" data-post-act="auto" data-id="${p.id}">Horário automático</button>` : ""}
+      ${planned ? `<button class="btn" data-post-act="now" data-id="${p.id}">Publicar agora</button>` : ""}
+      <button class="btn" data-post-act="open" data-id="${p.id}">Abrir no Estúdio</button>
+      ${planned ? `<button class="btn danger" data-post-act="skip" data-id="${p.id}">Não postar no ${PLATFORM[p.platform].slice(2)}</button>` : ""}
+      <button class="btn" value="cancel" formnovalidate>Fechar</button>
+    </div></form>`;
+  dlg.showModal();
+}
+
+async function movePost(id, body, msg) {
+  if (body.when && body.when !== "now" && Date.parse(body.when) < Date.now() + 5 * 60_000) throw new Error("Escolha um horário no futuro");
+  await api(`/api/posts/${id}/move`, { method: "POST", body });
+  toast(msg);
+  await refresh();
 }
 
 async function moveClip(id, at) {
@@ -1761,9 +1820,9 @@ $("#side-channels").addEventListener("click", (e) => {
   render();
 });
 $("#agenda").addEventListener("dragstart", (e) => {
-  const ev = e.target.closest?.("[data-ev][draggable]");
+  const ev = e.target.closest?.("[data-ev][draggable], [data-post][draggable]");
   if (!ev) return;
-  e.dataTransfer.setData("text/plain", ev.dataset.ev);
+  e.dataTransfer.setData("text/plain", ev.dataset.post ? `post:${ev.dataset.post}` : `clip:${ev.dataset.ev}`);
   e.dataTransfer.effectAllowed = "move";
   ev.classList.add("dragging");
 });
@@ -1777,22 +1836,45 @@ $("#agenda").addEventListener("dragover", (e) => {
 });
 $("#agenda").addEventListener("drop", act(async (e) => {
   const cell = e.target.closest("[data-drop], [data-drop-day]");
-  const id = +e.dataTransfer.getData("text/plain");
+  const [kind, raw] = e.dataTransfer.getData("text/plain").split(":");
+  const id = +raw;
   if (!cell || !id) return;
   e.preventDefault();
   cell.classList.remove("over");
-  const c = state.clips.find((x) => x.id === id);
+  const cur = kind === "post" ? state.posts.find((p) => p.id === id)?.scheduled_at : state.clips.find((x) => x.id === id)?.scheduled_at;
   let at;
   if (cell.dataset.drop) at = new Date(cell.dataset.drop);
   else { // mês: mantém a hora, muda o dia
-    const old = new Date(c.scheduled_at);
+    const old = new Date(cur);
     at = new Date(cell.dataset.dropDay + "T00:00");
     at.setHours(old.getHours(), old.getMinutes(), 0, 0);
   }
-  if (c.scheduled_at && Date.parse(c.scheduled_at) === at.getTime()) return;
-  await moveClip(id, at);
+  if (cur && Date.parse(cur) === at.getTime()) return;
+  if (kind === "post") await movePost(id, { when: at.toISOString() }, `Movido para ${when(at.toISOString())} 🔒`);
+  else await moveClip(id, at);
 }));
 $("#ev-dialog").addEventListener("click", act(async (e) => {
+  const pb = e.target.closest("[data-post-act]");
+  if (pb) {
+    e.preventDefault();
+    const id = +pb.dataset.id, dlg = $("#ev-dialog"), a = pb.dataset.postAct;
+    if (a === "save") {
+      const v = dlg.querySelector("[name=at]").value;
+      if (v) await movePost(id, { when: new Date(v).toISOString() }, "Horário salvo 🔒");
+    } else if (a === "auto") await movePost(id, { when: null }, "De volta à fila automática");
+    else if (a === "now") {
+      if (!confirm("Publicar agora nesta plataforma?")) return;
+      await movePost(id, { when: "now" }, "Publicando…");
+    } else if (a === "skip") {
+      if (!confirm("Não postar este corte nesta plataforma? O próximo melhor corte entra no lugar.")) return;
+      await movePost(id, { skip: true }, "Removido da fila — o próximo corte entra no lugar");
+    } else if (a === "open") {
+      dlg.close();
+      return openClip(state.posts.find((p) => p.id === id).clip_id);
+    }
+    dlg.close();
+    return;
+  }
   const b = e.target.closest("[data-ev-act]");
   if (!b) return;
   e.preventDefault();
@@ -1879,6 +1961,7 @@ document.addEventListener("click", act(async (e) => {
     return refresh();
   }
   if (t.closest("#agenda [data-ev]")) return openEvDialog(+t.closest("[data-ev]").dataset.ev);
+  if (t.closest("#agenda [data-post]")) return openPostDialog(+t.closest("[data-post]").dataset.post);
   if (t.closest("[data-perf-plat]")) {
     ui.perfPlat = t.closest("[data-perf-plat]").dataset.perfPlat;
     return renderPerf();
