@@ -40,7 +40,8 @@ export async function fetchSource(jobId: number, source: string, onProgress: (ms
         // O YouTube exige resolver um desafio em JS; sem runtime o download volta 403.
         // Reaproveita o próprio Node que roda o worker (yt-dlp só ativa o deno por padrão).
         "--js-runtimes", `node:${process.execPath}`,
-        ...(existsSync(config.ytdlpCookies) ? ["--cookies", config.ytdlpCookies] : []),
+        ...(existsSync(config.ytdlpCookies) ? ["--cookies", config.ytdlpCookies]
+          : existsSync(config.ytdlpRobotCookies) ? ["--cookies", config.ytdlpRobotCookies] : []),
         "--encoding", "utf-8", // no Windows o padrão é a code page do console e quebra acentos do título
         "--retries", "10", "--fragment-retries", "10",
         "--progress", // --print implica --quiet; isto mantém o progresso para o dashboard

@@ -15,7 +15,7 @@ import { approve, needsTikTokChoices, rebalance, reject } from "./schedule.ts";
 import { readSetting, SETTING_KEYS, writeSettings, type SettingKey } from "./settings.ts";
 import { chatCandidates, telegramBotInfo, telegramTest, tg } from "./telegram.ts";
 import { diskState } from "./disk.ts";
-import { robotAdoptMain, robotLoginCancel, robotLoginFinish, robotLoginStart, robotLogout, robotScreenUrl, robotStatus } from "./publish/tiktokWeb.ts";
+import { youtubeCookies, youtubeLoginOpen, robotAdoptMain, robotLoginCancel, robotLoginFinish, robotLoginStart, robotLogout, robotScreenUrl, robotStatus } from "./publish/tiktokWeb.ts";
 
 const publicChannel = (c: Channel) => {
   const creds = credentialsOf(c);
@@ -75,6 +75,10 @@ route("GET", "/api/settings", async () => {
     values: out,
     redirects: base ? { youtube: youtubeRedirect(), tiktok: tiktokRedirect() } : null,
     telegram: { bot: await telegramBotInfo(), candidates: [...chatCandidates.values()] },
+    youtubeDownload: await Promise.race([
+      youtubeCookies().then((c) => ({ loggedIn: !!c }), (e) => ({ loggedIn: false, error: (e as Error).message })),
+      new Promise((r) => setTimeout(() => r({ loggedIn: false, error: "robô não respondeu" }), 8000)),
+    ]),
   };
 });
 
@@ -306,6 +310,31 @@ function saveChannel(id: string, body: Partial<Channel> & { credentials?: unknow
   bus.emit("channel-saved", id);
   return publicChannel(getChannel(id)!);
 }
+
+// ---------- YouTube para downloads (sessão da janela principal do robô) ----------
+
+route("POST", "/api/youtube-download/login", async () => {
+  try {
+    await youtubeLoginOpen();
+  } catch (e) {
+    throw new HttpError(409, (e as Error).message);
+  }
+  return { ok: true, screen: robotScreenUrl() };
+});
+
+route("GET", "/api/worker/youtube-cookies", async (_q, res) => {
+  const txt = await youtubeCookies().catch(() => null);
+  if (!txt) throw new HttpError(404, "sem conta do YouTube no robô");
+  res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+  res.end(txt);
+}, "worker");
+
+route("POST", "/api/jobs/retry-failed", () => {
+  const failed = all<{ id: number }>("SELECT id FROM jobs WHERE status = 'FAILED'");
+  for (const { id } of failed) updateJob(id, { status: "QUEUED", error: "", detail: "" });
+  bus.emit("change", { table: "jobs" });
+  return { retried: failed.length };
+});
 
 // ---------- Robô do TikTok: login por canal ----------
 

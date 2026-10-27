@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync, mkdirSync, openAsBlob, renameSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, openAsBlob, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -52,10 +52,24 @@ function progress(send: (detail: string) => Promise<unknown>) {
   };
 }
 
+/**
+ * Antes de baixar do YouTube: pega no hub a sessão do YouTube logada no navegador do robô
+ * (resolve o "confirme que você não é um robô"). Sem sessão lá, segue sem cookies.
+ */
+async function refreshYoutubeCookies(source: string) {
+  if (!/youtu\.?be/.test(source) || existsSync(config.ytdlpCookies)) return;
+  try {
+    writeFileSync(config.ytdlpRobotCookies, await hub<string>("GET", "/api/worker/youtube-cookies"));
+  } catch {
+    rmSync(config.ytdlpRobotCookies, { force: true });
+  }
+}
+
 async function processJob({ job, channel, hasClips, template }: Extract<Task, { type: "job" }>) {
   const report = (fields: Record<string, unknown>) => hub("POST", `/api/worker/jobs/${job.id}`, fields);
   const dir = jobDir(job.id);
   try {
+    await refreshYoutubeCookies(job.source);
     const src = await fetchSource(job.id, job.source, progress((d) => report({ detail: d })));
     await report({ video_url: src.videoUrl, video_id: src.videoId, title: src.title, uploader: src.uploader ?? "", duration: src.duration, status: "TRANSCRIBING", detail: "" });
 

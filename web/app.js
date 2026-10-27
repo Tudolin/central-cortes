@@ -140,7 +140,7 @@ function renderPipeline() {
   const failedClips = clips.filter((c) => c.status === "FAILED" || c.status === "PUBLISH_FAILED");
   $("#failures").innerHTML =
     failedJobs.length + failedClips.length
-      ? `<div class="section-title">Falhas</div>` +
+      ? `<div class="section-title">Falhas ${failedJobs.length > 1 ? `<button class="btn small" data-retry-all>Tentar todos de novo (${failedJobs.length})</button>` : ""}</div>` +
         failedJobs.map((j) => `<div class="card fail"><b>Job #${j.id}</b><span>${esc(j.title || j.source)}</span><div class="err">${esc(j.error)}</div>
           <button class="btn small" data-retry="${j.id}">Tentar de novo</button><button class="btn small danger" data-del="${j.id}">Excluir</button></div>`).join("") +
         failedClips.map((c) => `<div class="card fail"><b>${c.status === "FAILED" ? "Render" : "Publicação"} · corte #${c.id}</b><span>${esc(c.title)}</span><div class="err">${esc(c.error)}</div>
@@ -778,6 +778,16 @@ function renderIntegrations() {
         </div>
       </form>
 
+      <div class="integ">
+        <div class="integ-head"><b>⬇ YouTube para downloads</b>
+          ${settingsData.youtubeDownload?.loggedIn ? '<span class="ok-dot">conta logada no robô</span>' : '<span class="muted">sem conta</span>'}</div>
+        <div class="muted help">Quando o YouTube bloqueia os downloads ("confirme que você não é um robô"), o worker usa uma conta do Google logada no navegador do robô. Use uma conta secundária: ela só é usada para assistir vídeos públicos.</div>
+        <div class="actions">
+          <button class="btn small primary" type="button" data-yt-login>${settingsData.youtubeDownload?.loggedIn ? "Trocar conta" : "Entrar no YouTube pelo robô"}</button>
+          <a class="btn small" href="${esc(state.integrations.robotScreen)}" target="_blank" rel="noopener">Abrir tela remota</a>
+        </div>
+      </div>
+
       ${platformCard("youtube", ["youtube_client_id", "youtube_client_secret"],
         "Publica os cortes como Shorts no canal conectado. As chaves do app servem para todos os canais; cada canal conecta a própria conta.")}
       ${platformCard("tiktok", ["tiktok_client_key", "tiktok_client_secret"],
@@ -1346,6 +1356,17 @@ document.addEventListener("click", act(async (e) => {
   if (t.dataset.del && confirm("Excluir o job e todos os arquivos dele?")) await api(`/api/jobs/${t.dataset.del}`, { method: "DELETE" });
   if (t.dataset.rerender) await api(`/api/clips/${t.dataset.rerender}/rerender`, { method: "POST" });
   if (t.dataset.republish) await api(`/api/clips/${t.dataset.republish}/approve`, { method: "POST", body: { when: "now" } });
+  if (t.dataset.ytLogin !== undefined) {
+    t.blur();
+    const r = await api("/api/youtube-download/login", { method: "POST" });
+    window.open(r.screen, "_blank", "noopener");
+    toast("Login do Google aberto na tela remota do robô — entre com a conta e depois volte aqui");
+    setTimeout(() => loadSettings().catch(() => {}), 60_000);
+  }
+  if (t.dataset.retryAll !== undefined) {
+    const r = await api("/api/jobs/retry-failed", { method: "POST" });
+    toast(`${r.retried} job(s) de volta para a fila`);
+  }
   if (t.dataset.robot) {
     const action = t.dataset.robot;
     if (action === "logout" && !confirm("Apagar o login do robô deste canal? Os posts pelo robô param até entrar de novo.")) return;

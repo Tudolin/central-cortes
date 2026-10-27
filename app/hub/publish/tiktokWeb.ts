@@ -100,6 +100,45 @@ export async function robotAdoptMain(channelId: string) {
   }
 }
 
+// ---------- YouTube para downloads ----------
+// O YouTube às vezes bloqueia downloads da conexão de casa ("confirme que você não é um robô").
+// Com uma conta do Google logada na janela principal do robô, o hub exporta os cookies do YouTube
+// em formato Netscape e o worker passa para o yt-dlp. A conta só é usada para ler vídeos públicos.
+
+const YT_AUTH = ["LOGIN_INFO", "SAPISID", "__Secure-3PSID", "SID"];
+
+/** Cookies do YouTube/Google da janela principal (Netscape) ou null se não houver conta logada. */
+export async function youtubeCookies(): Promise<string | null> {
+  const browser = await connect();
+  try {
+    const main = browser.contexts()[0];
+    if (!main) return null;
+    const cookies = await main.cookies(["https://www.youtube.com", "https://youtube.com", "https://accounts.google.com", "https://www.google.com"]);
+    if (!cookies.some((c) => YT_AUTH.includes(c.name) && /youtube\.com$/.test(c.domain))) return null;
+    const lines = cookies.map((c) => [
+      c.domain, c.domain.startsWith(".") ? "TRUE" : "FALSE", c.path, c.secure ? "TRUE" : "FALSE",
+      c.expires > 0 ? Math.floor(c.expires) : 0, c.name, c.value,
+    ].join("\t"));
+    return ["# Netscape HTTP Cookie File", ...lines, ""].join("\n");
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+/** Abre o login do Google/YouTube na janela principal do robô (o usuário entra pela tela remota). */
+export async function youtubeLoginOpen() {
+  const browser = await connect();
+  try {
+    const main = browser.contexts()[0];
+    if (!main) throw new Error("janela principal do robô não encontrada");
+    const page = await main.newPage();
+    await page.goto("https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+    await page.bringToFront().catch(() => {});
+  } finally {
+    await browser.close().catch(() => {}); // só desconecta: a aba fica aberta para o login
+  }
+}
+
 export function robotLogout(channelId: string) {
   rmSync(sessionPath(channelId), { force: true });
 }
