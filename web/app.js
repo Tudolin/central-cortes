@@ -2146,11 +2146,21 @@ function handleHash() {
 function connect() {
   const es = new EventSource("/api/events");
   es.onmessage = () => refresh().catch(() => {});
-  es.onerror = () => {}; // EventSource reconecta sozinho
+  // Ao reconectar, busca o que mudou enquanto a conexão estava caída.
+  es.onopen = () => refresh().catch(() => {});
+  // Se o hub reinicia e responde erro (502), o navegador desiste de vez: reabre na mão.
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) setTimeout(connect, 5000);
+  };
 }
 
 refresh().then(() => {
   connect();
   handleHash();
   setInterval(renderWorkers, 30_000);
+  // Rede de segurança: aba em segundo plano ou evento perdido não deixam o painel parado.
+  setInterval(() => refresh().catch(() => {}), 60_000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refresh().catch(() => {});
+  });
 }).catch((e) => toast(e.message, true));
