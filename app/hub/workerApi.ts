@@ -20,10 +20,12 @@ import { tg } from "./telegram.ts";
 
 const STALE_MS = 3 * 60_000;
 
-function heartbeat(worker: string, task = "") {
+/** Atualiza o "visto por último" do worker; `task` só muda quando informado (com várias esteiras, o claim não apaga). */
+function heartbeat(worker: string, task?: string) {
   run(
-    `INSERT INTO workers (name, last_seen, task) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET last_seen = excluded.last_seen, task = excluded.task`,
-    worker, new Date().toISOString(), task,
+    `INSERT INTO workers (name, last_seen, task) VALUES (?, ?, ?)
+     ON CONFLICT(name) DO UPDATE SET last_seen = excluded.last_seen, task = COALESCE(?, task)`,
+    worker, new Date().toISOString(), task ?? "", task ?? null,
   );
 }
 
@@ -68,11 +70,13 @@ function nextFinalNeeded(): Clip | undefined {
   return due.find((c) => !hasFinal(c) && Date.now() - (finalRequested.get(c.id) ?? 0) > 15 * 60_000);
 }
 
-route("POST", "/api/worker/claim", (req) => {
+route("POST", "/api/worker/claim", (req, _r, _p, body?: { kinds?: ("job" | "render")[] }) => {
   const worker = workerOf(req);
   heartbeat(worker);
+  // Worker com esteiras: cada uma pede só o seu tipo. Sem "kinds" (worker antigo), qualquer tarefa.
+  const wants = (k: "job" | "render") => !body?.kinds?.length || body.kinds.includes(k);
   // Primeiro: vídeos finais de cortes que saem em breve (sem eles a publicação espera).
-  const final = nextFinalNeeded();
+  const final = wants("render") ? nextFinalNeeded() : undefined;
   if (final) {
     finalRequested.set(final.id, Date.now());
     const job = getJob(final.job_id)!;
@@ -80,13 +84,13 @@ route("POST", "/api/worker/claim", (req) => {
   }
   // Disco crítico: não aceita trabalho que gera arquivos novos no hub.
   if (diskState().critical) return { type: "idle", reason: "disco do hub cheio" };
-  const clip = get<Clip>("SELECT * FROM clips WHERE status = 'RENDER_QUEUED' ORDER BY id LIMIT 1");
+  const clip = wants("render") ? get<Clip>("SELECT * FROM clips WHERE status = 'RENDER_QUEUED' ORDER BY id LIMIT 1") : undefined;
   if (clip) {
     updateClip(clip.id, { status: "RENDERING", worker, error: "", detail: "" });
     const job = getJob(clip.job_id)!;
     return { type: "clip", clip: getClip(clip.id), job, channel: getChannel(job.channel_id), spec: specFor(clip) };
   }
-  const job = get<Job>("SELECT * FROM jobs WHERE status = 'QUEUED' ORDER BY id LIMIT 1");
+  const job = wants("job") ? get<Job>("SELECT * FROM jobs WHERE status = 'QUEUED' ORDER BY id LIMIT 1") : undefined;
   if (job) {
     updateJob(job.id, { status: "DOWNLOADING", worker, error: "", detail: "" });
     const hasClips = !!get("SELECT 1 FROM clips WHERE job_id = ?", job.id);

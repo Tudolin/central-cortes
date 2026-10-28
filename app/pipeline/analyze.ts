@@ -165,17 +165,21 @@ function claudeUnavailable(e: unknown) {
     || /credit balance|billing|quota|api[_ ]?key|overloaded|rate.?limit/i.test((e as Error).message ?? "");
 }
 
+type Lane = <T>(fn: () => Promise<T>) => Promise<T>;
+
 export async function analyze(
   ch: Channel, tpl: Template | null, t: Transcript, title: string, onProgress?: (detail: string) => void,
+  gpu: Lane = (fn) => fn(), // a IA local divide a GPU com a transcrição: entra na mesma fila
 ): Promise<{ cuts: CutProposal[]; usage: Usage }> {
-  if (config.localAi === "always") return analyzeLocal(ch, tpl, t, title, onProgress);
+  if (config.localAi === "always") return gpu(() => analyzeLocal(ch, tpl, t, title, onProgress));
   try {
     return await analyzeClaude(ch, tpl, t, title);
   } catch (e) {
     if (config.localAi === "off" || !claudeUnavailable(e)) throw e;
     console.warn(`[analyze] Claude indisponível (${(e as Error).message.slice(0, 120)}); usando IA local`);
     try {
-      return await analyzeLocal(ch, tpl, t, title, onProgress);
+      onProgress?.("IA local: aguardando a GPU");
+      return await gpu(() => analyzeLocal(ch, tpl, t, title, onProgress));
     } catch (le) {
       throw new Error(`Claude indisponível (${(e as Error).message.slice(0, 150)}) e a IA local falhou: ${(le as Error).message}`);
     }

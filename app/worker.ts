@@ -24,7 +24,34 @@ type Task =
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 2000);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-let currentTask = "";
+/** O que cada tarefa em andamento está fazendo (vai no heartbeat para o painel). */
+const active = new Map<string, string>();
+const activeSummary = () => [...active.values()].join(" · ").slice(0, 500);
+
+/**
+ * Fila por recurso: no máximo `n` tarefas usam o recurso ao mesmo tempo; as outras esperam a vez
+ * sem bloquear o resto (um vídeo baixa enquanto outro transcreve e um terceiro está na IA).
+ */
+function lane(n: number) {
+  let free = n;
+  const waiting: (() => void)[] = [];
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (free > 0) free--;
+    else await new Promise<void>((r) => waiting.push(r));
+    try {
+      return await fn();
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else free++;
+    }
+  };
+}
+const lanes = {
+  download: lane(2), // rede: dois downloads em paralelo
+  gpu: lane(1), // whisper e IA local (Ollama): a GPU de 8 GB não comporta os dois juntos
+  claude: lane(2), // análise pela API: só espera a resposta
+};
 
 async function hub<T = unknown>(method: string, path: string, body?: unknown, file?: string): Promise<T> {
   const headers: Record<string, string> = { authorization: `Bearer ${config.workerToken}`, "x-worker": config.workerName };
@@ -42,10 +69,10 @@ async function hub<T = unknown>(method: string, path: string, body?: unknown, fi
 }
 
 /** Progresso com throttle de 2 s para não inundar o hub. */
-function progress(send: (detail: string) => Promise<unknown>) {
+function progress(key: string, send: (detail: string) => Promise<unknown>) {
   let last = 0;
   return (detail: string) => {
-    currentTask = detail;
+    active.set(key, `${key}: ${detail}`);
     if (Date.now() - last < 2000) return;
     last = Date.now();
     send(detail).catch(() => {});
@@ -68,12 +95,22 @@ async function refreshYoutubeCookies(source: string) {
 async function processJob({ job, channel, hasClips, template }: Extract<Task, { type: "job" }>) {
   const report = (fields: Record<string, unknown>) => hub("POST", `/api/worker/jobs/${job.id}`, fields);
   const dir = jobDir(job.id);
+  const key = `job #${job.id}`;
+  const tick = progress(key, (d) => report({ detail: d }));
   try {
-    await refreshYoutubeCookies(job.source);
-    const src = await fetchSource(job.id, job.source, progress((d) => report({ detail: d })));
-    await report({ video_url: src.videoUrl, video_id: src.videoId, title: src.title, uploader: src.uploader ?? "", duration: src.duration, status: "TRANSCRIBING", detail: "" });
+    tick("na fila do download");
+    const src = await lanes.download(async () => {
+      await refreshYoutubeCookies(job.source);
+      return fetchSource(job.id, job.source, tick);
+    });
+    // Baixado: enquanto espera a GPU, o próximo vídeo já pode estar baixando.
+    await report({ video_url: src.videoUrl, video_id: src.videoId, title: src.title, uploader: src.uploader ?? "", duration: src.duration, detail: "baixado — aguardando a GPU" });
+    active.set(key, `${key}: aguardando a GPU`);
 
-    const transcript = await transcribe(dir, src.path, progress((d) => report({ detail: d })));
+    const transcript = await lanes.gpu(async () => {
+      await report({ status: "TRANSCRIBING", detail: "" });
+      return transcribe(dir, src.path, tick);
+    });
     await hub("PUT", `/api/worker/jobs/${job.id}/transcript`, undefined, join(dir, "transcript.json"));
 
     if (hasClips) {
@@ -81,7 +118,7 @@ async function processJob({ job, channel, hasClips, template }: Extract<Task, { 
       return;
     }
     await report({ status: "ANALYZING", detail: `${transcript.words.length} palavras` });
-    const { cuts, usage } = await analyze(channel, template, transcript, src.title, progress((d) => report({ detail: d })));
+    const { cuts, usage } = await lanes.claude(() => analyze(channel, template, transcript, src.title, tick, lanes.gpu));
     await report({ ...usage });
     await hub("POST", `/api/worker/jobs/${job.id}/clips`, { cuts });
   } catch (e) {
@@ -93,13 +130,14 @@ async function processJob({ job, channel, hasClips, template }: Extract<Task, { 
 async function processClip({ clip, job, channel, spec }: Extract<Task, { type: "clip" }>) {
   const report = (fields: Record<string, unknown>) => hub("POST", `/api/worker/clips/${clip.id}`, fields);
   const dir = jobDir(job.id);
+  const key = `corte #${clip.id}`;
   try {
-    const src = await fetchSource(job.id, job.source, progress((d) => report({ detail: `baixando fonte ${d}` })));
+    const src = await lanes.download(() => fetchSource(job.id, job.source, progress(key, (d) => report({ detail: `baixando fonte ${d}` }))));
     if (!existsSync(join(dir, "transcript.json"))) {
       writeFileSync(join(dir, "transcript.json"), await hub<string>("GET", `/api/worker/jobs/${job.id}/transcript`));
     }
     const assets = await fetchAssets(spec);
-    const layout = await renderClip(clip, channel, spec, assets, dir, src.path, loadTranscript(dir), progress((d) => report({ detail: d })));
+    const layout = await renderClip(clip, channel, spec, assets, dir, src.path, loadTranscript(dir), progress(key, (d) => report({ detail: d })));
     await report({ detail: "gerando proxy" });
     const proxy = await makeProxy(clip, dir, src.path, src.duration);
     await report({ detail: "enviando ao hub" });
@@ -120,8 +158,8 @@ async function processFinal({ clip, job, channel, spec }: Extract<Task, { type: 
   const file = clipFile(dir, clip.id, "mp4");
   try {
     if (!existsSync(file)) {
-      currentTask = `re-renderizando corte #${clip.id} para publicação`;
-      const src = await fetchSource(job.id, job.source, () => {});
+      active.set(`final #${clip.id}`, `re-renderizando corte #${clip.id} para publicação`);
+      const src = await lanes.download(() => fetchSource(job.id, job.source, () => {}));
       if (!existsSync(join(dir, "transcript.json"))) {
         writeFileSync(join(dir, "transcript.json"), await hub<string>("GET", `/api/worker/jobs/${job.id}/transcript`));
       }
@@ -157,21 +195,25 @@ async function fetchAssets(spec: RenderSpec): Promise<Map<number, string>> {
 export async function startWorker() {
   if (!config.workerToken) throw new Error("WORKER_TOKEN não definido");
   console.log(`[worker] ${config.workerName} → ${config.hubUrl}`);
-  setInterval(() => hub("POST", "/api/worker/heartbeat", { task: currentTask }).catch(() => {}), 30_000);
+  setInterval(() => hub("POST", "/api/worker/heartbeat", { task: activeSummary() }).catch(() => {}), 30_000);
 
-  let hubDown = false;
-  let greeted = false;
+  while (!(await hub("POST", "/api/worker/hello", {}).then(() => true, () => false))) await sleep(30_000);
+
+  // Esteiras independentes: vídeos novos (download → transcrição → IA) e renders/vídeos finais.
+  // Cada esteira tem várias vagas; os recursos (rede, GPU, API) são divididos pelas filas em `lanes`.
+  console.log(`[worker] ${config.workerJobs} vídeo(s) e ${config.workerRenders} render(s) em paralelo`);
+  await Promise.all([
+    ...Array.from({ length: config.workerJobs }, () => claimLoop("job")),
+    ...Array.from({ length: config.workerRenders }, () => claimLoop("render")),
+  ]);
+}
+
+let hubDown = false;
+async function claimLoop(kind: "job" | "render") {
   for (;;) {
-    if (!greeted) {
-      greeted = await hub("POST", "/api/worker/hello", {}).then(() => true, () => false);
-      if (!greeted) {
-        await sleep(30_000);
-        continue;
-      }
-    }
     let task: Task;
     try {
-      task = await hub<Task>("POST", "/api/worker/claim", {});
+      task = await hub<Task>("POST", "/api/worker/claim", { kinds: [kind] });
       if (hubDown) console.log("[worker] hub de volta");
       hubDown = false;
     } catch (e) {
@@ -181,15 +223,18 @@ export async function startWorker() {
       continue;
     }
     if (task.type === "idle") {
-      currentTask = "";
       await sleep(10_000);
       continue;
     }
-    currentTask = task.type === "job" ? `job #${task.job.id}` : task.type === "final" ? `enviando vídeo final do corte #${task.clip.id}` : `corte #${task.clip.id}`;
-    console.log(`[worker] ${currentTask}`);
-    if (task.type === "job") await processJob(task);
-    else if (task.type === "final") await processFinal(task);
-    else await processClip(task);
-    currentTask = "";
+    const key = task.type === "job" ? `job #${task.job.id}` : task.type === "final" ? `final #${task.clip.id}` : `corte #${task.clip.id}`;
+    active.set(key, task.type === "final" ? `enviando vídeo final do corte #${task.clip.id}` : key);
+    console.log(`[worker] ${key}`);
+    try {
+      if (task.type === "job") await processJob(task);
+      else if (task.type === "final") await processFinal(task);
+      else await processClip(task);
+    } finally {
+      active.delete(key);
+    }
   }
 }

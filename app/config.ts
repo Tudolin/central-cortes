@@ -79,6 +79,10 @@ export const config = {
   localAi: env("LOCAL_AI", "auto") as "auto" | "always" | "off",
   ollamaUrl: env("OLLAMA_URL", "http://127.0.0.1:11434"),
   localModel: env("LOCAL_MODEL", "qwen3:8b"),
+  // Paralelismo do worker: vídeos em andamento ao mesmo tempo e renders simultâneos.
+  // A GPU (transcrição e IA local) atende um por vez; download e análise pelo Claude rodam em paralelo.
+  workerJobs: num("WORKER_JOBS", 3),
+  workerRenders: num("WORKER_RENDERS", 1),
   ollamaBin: env("OLLAMA_BIN", join(process.env.LOCALAPPDATA ?? "", "Programs/Ollama/ollama.exe")),
 
   // URL pública, Telegram e chaves de YouTube/TikTok: ver hub/settings.ts (dashboard, com .env como fallback).
