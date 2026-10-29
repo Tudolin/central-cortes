@@ -19,6 +19,25 @@ export const targetsOf = (ch: Channel) => (JSON.parse(ch.publish_targets || "[]"
 
 /** Dois cortes do mesmo vídeo de origem ficam a pelo menos 3 dias de distância na mesma plataforma. */
 const SOURCE_GAP_MS = 3 * 86400_000;
+/** Segundos em comum a partir dos quais dois cortes do mesmo vídeo contam como o mesmo trecho. */
+const OVERLAP_S = 5;
+
+/** Vídeo de origem do job: o id do YouTube quando há (o mesmo vídeo com outro link é o mesmo vídeo). */
+export const sourceOf = (job: { video_id: string; source: string }) => job.video_id || job.source;
+
+/**
+ * Corte do canal, do mesmo vídeo de origem, que repete o trecho [start, end] — o YouTube trata trecho
+ * repetido como conteúdo duplicado. `statuses` limita a quais cortes comparar.
+ */
+export function overlapOf(channelId: string, src: string, start: number, end: number, statuses: string[], exceptId = 0) {
+  return get<Clip>(
+    `SELECT c.* FROM clips c JOIN jobs j ON j.id = c.job_id
+     WHERE j.channel_id = ? AND COALESCE(NULLIF(j.video_id, ''), j.source) = ? AND c.id != ?
+       AND c.status IN (${statuses.map(() => "?").join(",")}) AND MIN(c.end_s, ?) - MAX(c.start_s, ?) >= ?
+     ORDER BY c.id LIMIT 1`,
+    channelId, src, exceptId, ...statuses, end, start, OVERLAP_S,
+  );
+}
 /** A fila própria de uma plataforma só considera cortes aprovados nos últimos 14 dias. */
 const PLATFORM_LOOKBACK_MS = 14 * 86400_000;
 
@@ -185,6 +204,8 @@ export async function approve(clipId: number, when?: string, tiktok?: Omit<TikTo
     const invalid = validateTikTokSettings(tiktokSettings ? JSON.parse(tiktokSettings) : null, info, clip.end_s - clip.start_s);
     if (invalid) throw new Error(invalid);
   }
+  const dup = overlapOf(ch.id, sourceOf(job), clip.start_s, clip.end_s, ["SCHEDULED", "PUBLISHING", "PUBLISHED"], clip.id);
+  if (dup) throw new Error(`Repete o trecho do corte #${dup.id} ("${dup.title}"), que já foi aprovado`);
   const manual = when === "now" ? new Date(Date.now() + 5_000).toISOString() : when ? new Date(when).toISOString() : null;
   updateClip(clipId, {
     status: "SCHEDULED",

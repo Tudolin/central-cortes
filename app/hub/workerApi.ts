@@ -10,7 +10,7 @@ import { renderCaption } from "../pipeline/caption.ts";
 import { specFor, templateOf } from "./brandApi.ts";
 import { clipPath, transcriptPath, type ClipFile } from "./media.ts";
 import { diskState, finalWindowH } from "./disk.ts";
-import { rebalance } from "./schedule.ts";
+import { overlapOf, rebalance, sourceOf } from "./schedule.ts";
 import { tg } from "./telegram.ts";
 
 /**
@@ -136,7 +136,11 @@ route("POST", "/api/worker/jobs/:id/clips", (_q, _r, [id], body: {
   const ch = getChannel(job.channel_id)!;
   const aspect = templateOf(job.template_id, ch.id).tpl?.aspect ?? "9:16";
   if (get("SELECT 1 FROM clips WHERE job_id = ?", job.id)) throw new HttpError(409, "Job já tem cortes");
-  body.cuts.forEach((c, i) =>
+  // O mesmo vídeo enviado de novo (outro link, outro job): trechos que já viraram corte ficam de fora.
+  const ALL = ["PENDING_REVIEW", "RENDER_QUEUED", "RENDERING", "SCHEDULED", "PUBLISHING", "PUBLISHED", "PUBLISH_FAILED", "REJECTED"];
+  const cuts = body.cuts.filter((c) => !overlapOf(ch.id, sourceOf(job), c.start_s, c.end_s, ALL));
+  const repeated = body.cuts.length - cuts.length;
+  cuts.forEach((c, i) =>
     run(
       `INSERT INTO clips (job_id, idx, start_s, end_s, score, hook, title, caption, keywords, layout, zoom, aspect, teaser_start, teaser_end, speaker_name, speaker_role, pillar, hashtags)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -146,7 +150,9 @@ route("POST", "/api/worker/jobs/:id/clips", (_q, _r, [id], body: {
       c.teaser_start ?? 0, c.teaser_end ?? 0, c.speaker_name ?? "", c.speaker_role ?? "", c.pillar ?? "", c.hashtags ?? "",
     ),
   );
-  updateJob(job.id, body.cuts.length ? { status: "RENDERING", detail: "" } : { status: "DONE", detail: "IA não encontrou trechos com potencial" });
+  updateJob(job.id, cuts.length
+    ? { status: "RENDERING", detail: "" }
+    : { status: "DONE", detail: repeated ? "Os trechos escolhidos já tinham virado corte deste vídeo" : "IA não encontrou trechos com potencial" });
   bus.emit("change", { table: "clips" });
   return { ok: true };
 }, "worker");
