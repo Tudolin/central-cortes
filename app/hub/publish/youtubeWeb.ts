@@ -78,13 +78,33 @@ export async function youtubeStudioUpload(ch: Channel, clip: Clip, file: string,
     const id = link?.match(/(?:youtu\.be\/|shorts\/|v=)([\w-]{11})/)?.[1];
     if (!id) throw new Error("o Studio não mostrou o link do vídeo");
 
-    // Publica só depois que o envio terminar (o processamento continua sozinho no YouTube).
+    // Só publica depois da verificação de conteúdo (direitos autorais/diretrizes). O Studio avisa que publicar
+    // antes pode restringir a visibilidade: era isso que os envios pela API faziam (saíam públicos na hora).
     const progress = page.locator("ytcp-video-upload-progress").first();
-    for (let i = 0; i < 300 && /\d+\s?%|Enviando|Uploading/i.test(await progress.innerText().catch(() => "")); i++) await page.waitForTimeout(2000);
+    let status = "";
+    for (let i = 0; i < 600; i++) { // até 20 min
+      status = (await progress.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+      if (!/\d+\s?%|Enviando|Uploading|Verificando|Checking|Processando|Processing|restantes|remaining/i.test(status)) break;
+      await page.waitForTimeout(2000);
+    }
+    if (/problema encontrado|problemas encontrados|issues found|direitos autorais|copyright|restri/i.test(status) && !/nenhum problema|no issues/i.test(status)) {
+      throw new Error(`a verificação do YouTube apontou um problema ("${status.slice(0, 120)}"); o vídeo ficou privado no Studio`);
+    }
     const done = page.locator("#done-button").first();
     for (let i = 0; i < 60 && (await done.getAttribute("aria-disabled")) === "true"; i++) await page.waitForTimeout(2000);
     await done.click({ timeout: 30_000 });
-    await page.locator("ytcp-video-share-dialog, ytcp-uploads-still-processing-dialog").first().waitFor({ timeout: 3 * 60_000 });
+    // Se ainda assim o Studio disser que está verificando, volta e espera em vez de "Publicar mesmo assim".
+    const stillChecking = page.getByRole("button", { name: /^(Voltar|Go back)$/ }).last();
+    for (let i = 0; i < 20 && (await page.getByText(/Ainda estamos verificando|still checking/i).first().isVisible().catch(() => false)); i++) {
+      await stillChecking.click({ timeout: 10_000 }).catch(() => {});
+      await page.waitForTimeout(60_000);
+      await done.click({ timeout: 30_000 });
+    }
+    // Sucesso: aparece o aviso de vídeo publicado ou o diálogo de envio fecha.
+    await Promise.race([
+      page.locator("ytcp-video-share-dialog").first().waitFor({ timeout: 3 * 60_000 }),
+      page.locator("ytcp-uploads-dialog").first().waitFor({ state: "detached", timeout: 3 * 60_000 }),
+    ]);
     await context.storageState({ path: sessionPath(ch.id, "youtube") }).catch(() => {}); // mantém os cookies renovados
     return { status: "OK" as const, external_id: id, url: `https://youtube.com/shorts/${id}`, variant: "studio" };
   } catch (e) {
