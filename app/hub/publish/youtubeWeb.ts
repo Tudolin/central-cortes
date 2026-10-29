@@ -92,19 +92,22 @@ export async function youtubeStudioUpload(ch: Channel, clip: Clip, file: string,
     }
     const done = page.locator("#done-button").first();
     for (let i = 0; i < 60 && (await done.getAttribute("aria-disabled")) === "true"; i++) await page.waitForTimeout(2000);
-    await done.click({ timeout: 30_000 });
-    // Se ainda assim o Studio disser que está verificando, volta e espera em vez de "Publicar mesmo assim".
-    const stillChecking = page.getByRole("button", { name: /^(Voltar|Go back)$/ }).last();
-    for (let i = 0; i < 20 && (await page.getByText(/Ainda estamos verificando|still checking/i).first().isVisible().catch(() => false)); i++) {
-      await stillChecking.click({ timeout: 10_000 }).catch(() => {});
-      await page.waitForTimeout(60_000);
+    // Depois da verificação inicial o YouTube ainda roda uma mais completa e avisa "Ainda estamos verificando"
+    // ao publicar. Nunca usa "Publicar mesmo assim": volta, espera e tenta de novo (até ~30 min).
+    const warning = page.getByText(/Ainda estamos verificando|still checking/i).first();
+    let released = false;
+    for (let i = 0; i < 30 && !released; i++) {
       await done.click({ timeout: 30_000 });
+      const warned = await warning.waitFor({ state: "visible", timeout: 8000 }).then(() => true, () => false);
+      if (!warned) released = true;
+      else {
+        await page.getByRole("button", { name: /^(Voltar|Go back)$/ }).last().click({ timeout: 10_000 });
+        await page.waitForTimeout(60_000);
+      }
     }
-    // Sucesso: aparece o aviso de vídeo publicado ou o diálogo de envio fecha.
-    await Promise.race([
-      page.locator("ytcp-video-share-dialog").first().waitFor({ timeout: 3 * 60_000 }),
-      page.locator("ytcp-uploads-dialog").first().waitFor({ state: "detached", timeout: 3 * 60_000 }),
-    ]);
+    if (!released) throw new Error("o YouTube não terminou a verificação completa em 30 min; o vídeo ficou privado no Studio");
+    // Sucesso: o Studio mostra o diálogo "Vídeo publicado" com o link.
+    await page.getByText(/^(Vídeo publicado|Video published)$/).first().waitFor({ timeout: 3 * 60_000 });
     await context.storageState({ path: sessionPath(ch.id, "youtube") }).catch(() => {}); // mantém os cookies renovados
     return { status: "OK" as const, external_id: id, url: `https://youtube.com/shorts/${id}`, variant: "studio" };
   } catch (e) {
