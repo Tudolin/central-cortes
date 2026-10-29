@@ -129,9 +129,10 @@ export function rebalance(channelId: string) {
     if (c.scheduled_at !== slot) updateClip(c.id, { scheduled_at: slot });
   });
 
-  // Filas próprias por plataforma (ex.: YouTube 1x/dia). Plataformas sem fila própria perdem os planejados.
+  // Filas próprias por plataforma (ex.: YouTube 1x/dia). Plataformas sem fila própria perdem os planejados
+  // automáticos; os marcados à mão (ex.: repostagens) ficam.
   const own = ownSlots(ch);
-  for (const p of targetsOf(ch)) if (!(p in own)) dropPlanned(ch.id, p, true);
+  for (const p of targetsOf(ch)) if (!(p in own)) dropPlanned(ch.id, p, false);
   for (const [p, slots] of Object.entries(own) as [Platform, string][]) planPlatform(ch, p, slots);
 }
 

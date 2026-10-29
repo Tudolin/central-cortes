@@ -5,6 +5,7 @@ import { config, PRICING, type Effort } from "../config.ts";
 import { parseJson, type Brand, type Template } from "../brand.ts";
 import type { Channel, Layout } from "../db.ts";
 import { compactTranscript, type Transcript } from "./transcribe.ts";
+import { cleanTag, fixedTags } from "./caption.ts";
 
 const client = new Anthropic();
 
@@ -130,7 +131,7 @@ ${layoutRule}
 - zoom_on_emphasis: true quando há picos de ênfase que merecem punch-in.
 - palavras_destaque: 4 a 10 palavras exatamente como aparecem na transcrição, as de maior impacto (para destacar na legenda).
 - teaser_start_seconds / teaser_end_seconds: a frase mais forte DENTRO do corte, de 2 a 6 segundos, que funcionaria como chamada repetida no início do vídeo. Use 0 e 0 se nenhuma frase se sustenta sozinha.
-- hashtags_assunto: 1 ou 2 hashtags do assunto específico do corte, com #, minúsculas e sem acento (ex.: "#hipertrofia").
+- hashtags_assunto: 2 hashtags do assunto específico do corte que o público realmente pesquisa no Brasil (ex.: "#hipertrofia", "#reformatributaria", "#escala6x1"), com #, minúsculas, sem acento e sem espaço. Prefira o termo popular ao técnico, escreva nomes próprios corretamente (nunca copie palavra mal transcrita) e não repita as fixas do canal${fixedTags(ch.caption_template).length ? ` (${fixedTags(ch.caption_template).map((t) => "#" + t).join(" ")})` : ""}.
 ${pillarsOf(ch).length ? `- pilar: o pilar de conteúdo do corte, um destes: ${pillarsOf(ch).join(", ")}.\n` : ""}- falante_nome / falante_cargo: nome e cargo/função de quem fala no trecho, só se forem ditos explicitamente na transcrição ou no título do vídeo (ex.: "Fernando Haddad" / "Ministro da Fazenda"). Nunca deduza nem invente; na dúvida, use "".
 
 Retorne até ${ch.clips_target} cortes, do maior para o menor score. Se o vídeo não tiver material bom, retorne menos.`;
@@ -337,7 +338,7 @@ function toCuts(ch: Channel, tpl: Template | null, t: Transcript, parsed: Parsed
       speaker_name: c.falante_nome.trim().slice(0, 60),
       speaker_role: c.falante_cargo.trim().slice(0, 80),
       pillar: c.pilar ?? "",
-      hashtags: c.hashtags_assunto.slice(0, 2).map((h) => "#" + h.replace(/^#/, "").replace(/\s+/g, "")).join(" "),
+      hashtags: c.hashtags_assunto.map(cleanTag).filter((h) => h.length >= 3 && !fixedTags(ch.caption_template).includes(h)).slice(0, 2).map((h) => "#" + h).join(" "),
     });
   }
   cuts.sort((a, b) => b.score - a.score);

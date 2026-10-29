@@ -9,12 +9,39 @@ export function timestampLink(job: Pick<Job, "video_url" | "video_id">, seconds:
   return `${job.video_url}${job.video_url.includes("?") ? "&" : "?"}t=${t}s`;
 }
 
+/** Hashtag no formato que a busca encontra: minúscula, sem acento, só letras e números ("#Saúde Mental" → "saudemental"). */
+export const cleanTag = (t: string) => t.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const MAX_TAGS = 5;
+const TAG_LINE = /^\s*(#[^\s#]+\s*)+$/;
+
+/** Hashtags fixas do canal (as do template de legenda), já limpas. */
+export const fixedTags = (template: string) =>
+  [...new Set(template.split("\n").map((l) => l.replace(/\{\w+\}/g, "")).filter((l) => TAG_LINE.test(l)).flatMap((l) => l.match(/#[^\s#]+/g) ?? []).map(cleanTag))];
+
+/**
+ * Junta as hashtags da legenda numa linha só, no fim: as do assunto do corte primeiro (o YouTube mostra as
+ * 3 primeiras acima do título e o TikTok usa as primeiras para classificar), depois as fixas do canal.
+ * Sem repetidas nem acento, no máximo 5: poucas e certeiras rendem mais (o YouTube ignora todas acima de 15).
+ */
+export function tidyHashtags(caption: string, subject = ""): string {
+  const lines = caption.split("\n");
+  const inLines = lines.filter((l) => TAG_LINE.test(l)).flatMap((l) => l.match(/#[^\s#]+/g) ?? []);
+  const seen = new Set<string>();
+  const tags = [...(subject.match(/#[^\s#]+/g) ?? []), ...inLines]
+    .map(cleanTag)
+    .filter((t) => t.length >= 3 && t.length <= 30 && !seen.has(t) && !!seen.add(t))
+    .slice(0, MAX_TAGS);
+  const body = lines.filter((l) => !TAG_LINE.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+  return tags.length ? `${body}\n\n${tags.map((t) => "#" + t).join(" ")}` : body;
+}
+
 export function renderCaption(
   template: string, job: Pick<Job, "video_url" | "video_id" | "uploader" | "title">, title: string, startS: number,
   extra: { pillar?: string; hashtags?: string } = {},
 ): string {
   const link = timestampLink(job, startS);
-  return template
+  const text = template
     .replaceAll("{fonte}", job.uploader || job.title)
     .replaceAll("{titulo_video}", job.title)
     .replaceAll("{pilar}", extra.pillar ?? "")
@@ -25,6 +52,7 @@ export function renderCaption(
     .replaceAll("{titulo_corte}", title)
     .replaceAll("{url_video_original}", job.video_url)
     .replaceAll("{timestamp_segundos}", String(Math.floor(startS)));
+  return tidyHashtags(text, extra.hashtags);
 }
 
 /** Monta o JSON no schema do contrato (pipeline_metadata + cortes) a partir do estado atual do banco. */
