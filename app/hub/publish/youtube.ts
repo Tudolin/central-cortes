@@ -66,7 +66,10 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
   // título sem "#Shorts" (vertical curto já vira Short), nome de arquivo e conteúdo alterado declarado.
   const app = ch.youtube_recipe !== "api";
   const base = clip.title.replace(/[<>]/g, "").trim();
-  const title = app || clip.aspect === "16:9" || base.length > 91 ? base.slice(0, 100) : `${base} #Shorts`;
+  // "app_tags": como o post manual que teve alcance no Última Rep, as 3 primeiras hashtags da legenda vão no título.
+  const tags = ch.youtube_recipe === "app_tags" ? (clip.caption.match(/#[^\s#]+/g) ?? []).slice(0, 3) : [];
+  let title = app || clip.aspect === "16:9" || base.length > 91 ? base.slice(0, 100) : `${base} #Shorts`;
+  for (const t of tags) if (title.length + t.length + 1 <= 100) title += " " + t;
   const size = statSync(file).size;
   const fileName = `${base.normalize("NFD").replace(/[^\x20-\x7e]/g, "").replace(/[^\w ,.-]/g, "").trim().slice(0, 80) || "corte"}.mp4`;
   const init = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
@@ -99,5 +102,5 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
   });
   const data = (await up.json().catch(() => ({}))) as { id?: string; error?: { message: string } };
   if (!up.ok || !data.id) throw new Error(`YouTube upload ${up.status}: ${data.error?.message ?? "sem id"}`);
-  return { status: "OK" as const, external_id: data.id, url: `https://youtube.com/shorts/${data.id}`, variant: app ? "app" : "api" };
+  return { status: "OK" as const, external_id: data.id, url: `https://youtube.com/shorts/${data.id}`, variant: tags.length ? "app_tags" : app ? "app" : "api" };
 }

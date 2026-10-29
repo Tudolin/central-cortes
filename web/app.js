@@ -710,7 +710,7 @@ const CH_FIELDS = [
   ["publish_targets", "Publicar em", { targets: true, full: true }],
   ["youtube_privacy", "YouTube: visibilidade", { select: ["public", "unlisted", "private"] }],
   ["youtube_category", "YouTube: categoria", { select: [["25", "Notícias e política"], ["22", "Pessoas e blogs"], ["24", "Entretenimento"], ["27", "Educação"], ["17", "Esportes"], ["26", "Estilo e dicas"]] }],
-  ["youtube_recipe", "YouTube: forma de envio", { select: [["app", "Como o app do celular (sem #Shorts no título, com nome de arquivo)"], ["api", "Envio antigo (#Shorts no título)"]] }],
+  ["youtube_recipe", "YouTube: forma de envio", { select: [["app", "Como o app do celular (sem #Shorts no título, com nome de arquivo)"], ["app_tags", "Como o app do celular + 3 hashtags no título"], ["api", "Envio antigo (#Shorts no título)"]] }],
   ["tiktok_mode", "TikTok: modo", { select: [["inbox", "Rascunho na caixa de entrada (sem auditoria)"], ["direct", "Publicação direta — visibilidade e interações escolhidas a cada aprovação (app auditado; reconecte a conta após trocar)"], ["browser", "Navegador (robô no TikTok Studio — publica direto, sem app aprovado)"]] }],
   ["webhook_url", "Webhook após publicar (opcional)", { full: true }],
 ];
