@@ -111,6 +111,8 @@ addColumns("channels", {
   publish_targets: `TEXT NOT NULL DEFAULT '["youtube","tiktok"]'`,
   youtube_privacy: "TEXT NOT NULL DEFAULT 'public'",
   youtube_category: "TEXT NOT NULL DEFAULT '25'",
+  // Receita do upload no YouTube: "app" imita o envio pelo app (alcance), "api" é o envio antigo.
+  youtube_recipe: "TEXT NOT NULL DEFAULT 'app'",
   tiktok_mode: "TEXT NOT NULL DEFAULT 'inbox'",
   tiktok_privacy: "TEXT NOT NULL DEFAULT 'SELF_ONLY'",
   title_banner: "INTEGER NOT NULL DEFAULT 1",
@@ -202,6 +204,7 @@ export interface Channel {
   publish_targets: string;
   youtube_privacy: string;
   youtube_category: string;
+  youtube_recipe: string;
   tiktok_mode: string;
   tiktok_privacy: string;
   title_banner: number;
@@ -289,6 +292,7 @@ export interface Post {
   updated_at: string;
   scheduled_at: string | null;
   locked: number;
+  variant: string;
 }
 
 export const all = <T>(sql: string, ...params: SQLInputValue[]) => db.prepare(sql).all(...params) as unknown as T[];
@@ -364,6 +368,8 @@ addColumns("posts", {
   saves: "INTEGER NOT NULL DEFAULT 0",
   metrics_at: "TEXT NOT NULL DEFAULT ''",
 });
+// Receita usada no upload (YouTube): para comparar o alcance entre formas de envio.
+addColumns("posts", { variant: "TEXT NOT NULL DEFAULT ''" });
 
 /** Todo canal começa com os modelos padrão (Podcast vira o padrão). */
 export function ensureTemplates(channelId: string) {

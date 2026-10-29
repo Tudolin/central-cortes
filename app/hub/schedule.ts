@@ -9,7 +9,7 @@ import { explainTikTokError, tiktokCreatorInfo, tiktokUpload, validateTikTokSett
 import { youtubeUpload } from "./publish/youtube.ts";
 import { tg } from "./telegram.ts";
 
-const PUBLISHERS: Record<Platform, (ch: Channel, clip: Clip, file: string) => Promise<{ status: "OK" | "INBOX"; external_id: string; url: string }>> = {
+const PUBLISHERS: Record<Platform, (ch: Channel, clip: Clip, file: string) => Promise<{ status: "OK" | "INBOX"; external_id: string; url: string; variant?: string }>> = {
   youtube: youtubeUpload,
   tiktok: tiktokUpload,
 };
@@ -247,10 +247,10 @@ async function publishClip(clip: Clip) {
       try {
         const r = await PUBLISHERS[platform](ch, clip, file);
         run(
-          `INSERT INTO posts (clip_id, platform, status, external_id, url, attempts) VALUES (?,?,?,?,?,1)
+          `INSERT INTO posts (clip_id, platform, status, external_id, url, variant, attempts) VALUES (?,?,?,?,?,?,1)
            ON CONFLICT(clip_id, platform) DO UPDATE SET status = excluded.status, external_id = excluded.external_id,
-             url = excluded.url, error = '', attempts = attempts + 1, updated_at = datetime('now')`,
-          clip.id, platform, r.status, r.external_id, r.url,
+             url = excluded.url, variant = excluded.variant, error = '', attempts = attempts + 1, updated_at = datetime('now')`,
+          clip.id, platform, r.status, r.external_id, r.url, r.variant ?? "",
         );
       } catch (e) {
         const msg = (e as Error).message.slice(0, 1000);
@@ -287,8 +287,8 @@ async function publishPlanned(p: Post) {
   try {
     const r = await PUBLISHERS[p.platform](ch, clip, clipPath(clip.job_id, clip.id, "mp4"));
     run(
-      "UPDATE posts SET status = ?, external_id = ?, url = ?, error = '', attempts = attempts + 1, updated_at = datetime('now') WHERE id = ?",
-      r.status, r.external_id, r.url, p.id,
+      "UPDATE posts SET status = ?, external_id = ?, url = ?, variant = ?, error = '', attempts = attempts + 1, updated_at = datetime('now') WHERE id = ?",
+      r.status, r.external_id, r.url, r.variant ?? "", p.id,
     );
     await tg.published(clip, [get<Post>("SELECT * FROM posts WHERE id = ?", p.id)!]);
   } catch (e) {

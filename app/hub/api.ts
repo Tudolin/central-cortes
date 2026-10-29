@@ -338,7 +338,7 @@ route("POST", "/api/clips/:id/rerender", (_q, _r, [id]) => {
 const CHANNEL_FIELDS = [
   "name", "niche", "tone", "extra_instructions", "caption_template", "model", "effort", "clips_target",
   "min_duration", "max_duration", "highlight_color", "max_words_per_frame", "webhook_url",
-  "schedule_slots", "platform_slots", "publish_targets", "youtube_privacy", "youtube_category", "tiktok_mode", "tiktok_privacy",
+  "schedule_slots", "platform_slots", "publish_targets", "youtube_privacy", "youtube_category", "youtube_recipe", "tiktok_mode", "tiktok_privacy",
   "title_banner", "banner_color", "banner_text_color", "default_template", "title_style",
 ] as const;
 

@@ -62,9 +62,13 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
   if (!refresh) throw new Error("YouTube não conectado neste canal");
   const { access_token } = await tokenRequest({ refresh_token: refresh, grant_type: "refresh_token" });
 
+  // Receita "app": o que muda entre os uploads pelo app do celular (com alcance) e os da API (sem):
+  // título sem "#Shorts" (vertical curto já vira Short), nome de arquivo e conteúdo alterado declarado.
+  const app = ch.youtube_recipe !== "api";
   const base = clip.title.replace(/[<>]/g, "").trim();
-  const title = clip.aspect === "16:9" || base.length > 91 ? base.slice(0, 100) : `${base} #Shorts`;
+  const title = app || clip.aspect === "16:9" || base.length > 91 ? base.slice(0, 100) : `${base} #Shorts`;
   const size = statSync(file).size;
+  const fileName = `${base.normalize("NFD").replace(/[^\x20-\x7e]/g, "").replace(/[^\w ,.-]/g, "").trim().slice(0, 80) || "corte"}.mp4`;
   const init = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
     method: "POST",
     headers: {
@@ -72,6 +76,7 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
       "content-type": "application/json; charset=UTF-8",
       "x-upload-content-length": String(size),
       "x-upload-content-type": "video/mp4",
+      ...(app ? { slug: fileName } : {}),
     },
     body: JSON.stringify({
       snippet: {
@@ -81,7 +86,7 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
         defaultLanguage: "pt-BR",
         defaultAudioLanguage: "pt-BR",
       },
-      status: { privacyStatus: ch.youtube_privacy || "public", selfDeclaredMadeForKids: false },
+      status: { privacyStatus: ch.youtube_privacy || "public", selfDeclaredMadeForKids: false, ...(app ? { containsSyntheticMedia: false } : {}) },
     }),
   });
   const location = init.headers.get("location");
@@ -94,5 +99,5 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
   });
   const data = (await up.json().catch(() => ({}))) as { id?: string; error?: { message: string } };
   if (!up.ok || !data.id) throw new Error(`YouTube upload ${up.status}: ${data.error?.message ?? "sem id"}`);
-  return { status: "OK" as const, external_id: data.id, url: `https://youtube.com/shorts/${data.id}` };
+  return { status: "OK" as const, external_id: data.id, url: `https://youtube.com/shorts/${data.id}`, variant: app ? "app" : "api" };
 }
