@@ -2,7 +2,7 @@ import { statfsSync } from "node:fs";
 import { config } from "../config.ts";
 import { all, type Clip } from "../db.ts";
 import { bus } from "../events.ts";
-import { removeClipFiles } from "./media.ts";
+import { removeClipFiles, wantsDownload } from "./media.ts";
 import { tg } from "./telegram.ts";
 
 /**
@@ -52,6 +52,7 @@ function prune() {
     if (!["PENDING_REVIEW", "RENDER_QUEUED", "RENDERING"].includes(c.status)) removeClipFiles(c.job_id, c.id, ["proxy"]);
     // Vídeo final: só fica no hub perto da hora de publicar (o PC guarda o original e reenvia quando preciso).
     const far = c.scheduled_at && Date.parse(c.scheduled_at) > Date.now() + (finalWindowH() + 12) * 3600_000 && !c.schedule_locked;
+    if (wantsDownload(c.id)) continue;
     if (["PENDING_REVIEW", "FAILED"].includes(c.status) || (c.status === "SCHEDULED" && far && !soon.has(c.id))) removeClipFiles(c.job_id, c.id, ["mp4"]);
   }
 }

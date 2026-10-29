@@ -8,7 +8,7 @@ import { HttpError, must, route, serveFile } from "../http.ts";
 import type { CutProposal } from "../pipeline/analyze.ts";
 import { renderCaption } from "../pipeline/caption.ts";
 import { specFor, templateOf } from "./brandApi.ts";
-import { clipPath, transcriptPath, type ClipFile } from "./media.ts";
+import { clipPath, finalDownloads, transcriptPath, wantsDownload, type ClipFile } from "./media.ts";
 import { diskState, finalWindowH } from "./disk.ts";
 import { overlapOf, rebalance, sourceOf } from "./schedule.ts";
 import { tg } from "./telegram.ts";
@@ -67,7 +67,9 @@ function nextFinalNeeded(): Clip | undefined {
      ORDER BY scheduled_at`,
     until, until,
   );
-  return due.find((c) => !hasFinal(c) && Date.now() - (finalRequested.get(c.id) ?? 0) > 15 * 60_000);
+  // Pedidos de download no painel vêm antes: tem alguém esperando.
+  const wanted = [...finalDownloads.keys()].filter(wantsDownload).map((id) => getClip(id)).filter((c): c is Clip => !!c);
+  return [...wanted, ...due].find((c) => !hasFinal(c) && Date.now() - (finalRequested.get(c.id) ?? 0) > 15 * 60_000);
 }
 
 route("POST", "/api/worker/claim", (req, _r, _p, body?: { kinds?: ("job" | "render")[] }) => {

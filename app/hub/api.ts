@@ -8,7 +8,7 @@ import { bus } from "../events.ts";
 import { HttpError, MIME, must, route, serveFile } from "../http.ts";
 import { buildResult, renderCaption } from "../pipeline/caption.ts";
 import type { Transcript } from "../pipeline/transcribe.ts";
-import { clipPath, jobMediaDir, transcriptPath } from "./media.ts";
+import { clipPath, finalDownloads, jobMediaDir, transcriptPath, wantsDownload } from "./media.ts";
 import { explainTikTokError, tiktokAuthUrl, tiktokConnect, tiktokCreatorInfo, tiktokRedirect, type TikTokPostSettings } from "./publish/tiktok.ts";
 import { youtubeAuthUrl, youtubeConnect, youtubeRedirect } from "./publish/youtube.ts";
 import { approve, needsTikTokChoices, rebalance, reject, tick } from "./schedule.ts";
@@ -495,6 +495,18 @@ route("GET", "/media/clip/:file", (req, res, [file]) => {
     : undefined;
   // O vídeo final pode estar só no PC (fora da janela de publicação): mostra a prévia 720p no lugar.
   const path = clipPath(clip.job_id, clip.id, kind);
+  // Para baixar, só o final serve: pede ao PC e a página tenta de novo sozinha até ele chegar.
+  if (download && kind === "mp4" && !existsSync(path)) {
+    if (!wantsDownload(clip.id)) finalDownloads.set(clip.id, Date.now());
+    res.writeHead(202, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    res.end(`<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>Preparando vídeo</title>
+<body style="font:16px system-ui;padding:32px;max-width:520px">
+<h2>Buscando o vídeo no PC…</h2>
+<p>O vídeo final do corte #${clip.id} fica guardado no PC. Já pedi para ele enviar. Esta página tenta de novo a cada 15 s e o download começa sozinho quando o vídeo chegar.</p>
+<p style="color:#777">Leva de segundos a alguns minutos (mais se o PC precisar renderizar de novo). O PC precisa estar ligado.</p></body>`);
+    bus.emit("change", { table: "clips", id: clip.id });
+    return;
+  }
   const fallback = clipPath(clip.job_id, clip.id, "preview");
   serveFile(req, res, kind === "mp4" && !existsSync(path) && existsSync(fallback) ? fallback : path, download);
 });

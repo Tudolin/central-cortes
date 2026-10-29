@@ -13,6 +13,10 @@ export function jobMediaDir(jobId: number) {
 export const clipPath = (jobId: number, clipId: number, kind: ClipFile) =>
   join(jobMediaDir(jobId), kind === "proxy" || kind === "preview" ? `clip-${clipId}.${kind}.mp4` : `clip-${clipId}.${kind}`);
 
+/** Vídeos finais pedidos pelo botão Baixar (clipId → quando): o PC reenvia e o hub guarda por 1 dia. */
+export const finalDownloads = new Map<number, number>();
+export const wantsDownload = (clipId: number) => Date.now() - (finalDownloads.get(clipId) ?? 0) < 86400_000;
+
 export const transcriptPath = (jobId: number) => join(jobMediaDir(jobId), "transcript.json");
 
 export function removeClipFiles(jobId: number, clipId: number, kinds: ClipFile[] = ["mp4", "jpg", "proxy", "preview"]) {
