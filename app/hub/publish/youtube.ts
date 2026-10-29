@@ -67,7 +67,9 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
   const app = ch.youtube_recipe !== "api";
   const base = clip.title.replace(/[<>]/g, "").trim();
   // "app_tags": como o post manual que teve alcance no Última Rep, as 3 primeiras hashtags da legenda vão no título.
-  const tags = ch.youtube_recipe === "app_tags" ? (clip.caption.match(/#[^\s#]+/g) ?? []).slice(0, 3) : [];
+  // "phone": arquivo regravado pelo PC + metadados mínimos (sem idioma nem declaração extra), como o app envia.
+  const phone = ch.youtube_recipe === "phone";
+  const tags = ch.youtube_recipe === "app_tags" || phone ? (clip.caption.match(/#[^\s#]+/g) ?? []).slice(0, 3) : [];
   let title = app || clip.aspect === "16:9" || base.length > 91 ? base.slice(0, 100) : `${base} #Shorts`;
   for (const t of tags) if (title.length + t.length + 1 <= 100) title += " " + t;
   const size = statSync(file).size;
@@ -79,17 +81,16 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
       "content-type": "application/json; charset=UTF-8",
       "x-upload-content-length": String(size),
       "x-upload-content-type": "video/mp4",
-      ...(app ? { slug: fileName } : {}),
+      ...(phone ? { slug: encodeURIComponent(`${base.replace(/[\\/:*?"|]/g, "").slice(0, 80)}.mp4`) } : app ? { slug: fileName } : {}),
     },
     body: JSON.stringify({
       snippet: {
         title,
         description: clip.caption.replace(/[<>]/g, "").slice(0, 4900),
         categoryId: ch.youtube_category || "22",
-        defaultLanguage: "pt-BR",
-        defaultAudioLanguage: "pt-BR",
+        ...(phone ? {} : { defaultLanguage: "pt-BR", defaultAudioLanguage: "pt-BR" }),
       },
-      status: { privacyStatus: ch.youtube_privacy || "public", selfDeclaredMadeForKids: false, ...(app ? { containsSyntheticMedia: false } : {}) },
+      status: { privacyStatus: ch.youtube_privacy || "public", selfDeclaredMadeForKids: false, ...(app && !phone ? { containsSyntheticMedia: false } : {}) },
     }),
   });
   const location = init.headers.get("location");
@@ -102,5 +103,5 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
   });
   const data = (await up.json().catch(() => ({}))) as { id?: string; error?: { message: string } };
   if (!up.ok || !data.id) throw new Error(`YouTube upload ${up.status}: ${data.error?.message ?? "sem id"}`);
-  return { status: "OK" as const, external_id: data.id, url: `https://youtube.com/shorts/${data.id}`, variant: tags.length ? "app_tags" : app ? "app" : "api" };
+  return { status: "OK" as const, external_id: data.id, url: `https://youtube.com/shorts/${data.id}`, variant: phone ? "phone" : tags.length ? "app_tags" : app ? "app" : "api" };
 }

@@ -6,6 +6,7 @@ import type { ReadableStream as WebStream } from "node:stream/web";
 import { config } from "./config.ts";
 import type { AssetRef, RenderSpec, Template } from "./brand.ts";
 import type { Channel, Clip, Job } from "./db.ts";
+import { exec } from "./proc.ts";
 import { analyze } from "./pipeline/analyze.ts";
 import { clipFile, makeProxy, renderClip } from "./pipeline/render.ts";
 import { fetchSource, jobDir } from "./pipeline/source.ts";
@@ -152,6 +153,21 @@ async function processClip({ clip, job, channel, spec }: Extract<Task, { type: "
   }
 }
 
+/**
+ * Receita "phone" do YouTube: no Última Rep só tiveram alcance os envios com o arquivo regravado como o app
+ * do celular faz (6 Mbps, sem metadados do nosso render). O original fica intacto para outros usos.
+ */
+async function phoneEncode(file: string) {
+  const out = file.replace(/\.mp4$/, ".phone.mp4");
+  await exec(config.bin.ffmpeg, [
+    "-y", "-v", "error", "-i", file, "-map_metadata", "-1", "-map_chapters", "-1",
+    "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
+    "-c:v", "libx264", "-preset", "medium", "-b:v", "6M", "-maxrate", "8M", "-bufsize", "12M", "-profile:v", "high",
+    "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", out,
+  ]);
+  return out;
+}
+
 /** Envia ao hub o vídeo final de um corte que vai ser publicado em breve (renderiza de novo se sumiu daqui). */
 async function processFinal({ clip, job, channel, spec }: Extract<Task, { type: "final" }>) {
   const dir = jobDir(job.id);
@@ -165,7 +181,7 @@ async function processFinal({ clip, job, channel, spec }: Extract<Task, { type: 
       }
       await renderClip(clip, channel, spec, await fetchAssets(spec), dir, src.path, loadTranscript(dir), () => {});
     }
-    await hub("PUT", `/api/worker/clips/${clip.id}/files/mp4`, undefined, file);
+    await hub("PUT", `/api/worker/clips/${clip.id}/files/mp4`, undefined, channel.youtube_recipe === "phone" ? await phoneEncode(file) : file);
     await hub("POST", `/api/worker/clips/${clip.id}/final`, {});
   } catch (e) {
     await hub("POST", `/api/worker/clips/${clip.id}/final`, { error: errMsg(e) }).catch(() => {});
