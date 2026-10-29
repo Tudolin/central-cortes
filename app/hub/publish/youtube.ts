@@ -1,6 +1,7 @@
 import { openAsBlob, statSync } from "node:fs";
 import { settings } from "../settings.ts";
 import { credentialsOf, setCredentials, type Channel, type Clip } from "../../db.ts";
+import { youtubeStudioUpload } from "./youtubeWeb.ts";
 
 const SCOPE = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly";
 export const youtubeRedirect = () => `${settings.publicUrl}/oauth/youtube/callback`;
@@ -61,6 +62,16 @@ export async function youtubeUpload(ch: Channel, clip: Clip, file: string) {
   const refresh = credentialsOf(ch).youtube_refresh_token;
   if (!refresh) throw new Error("YouTube não conectado neste canal");
   const { access_token } = await tokenRequest({ refresh_token: refresh, grant_type: "refresh_token" });
+
+  // Receita "studio": o robô publica pelo site; a API só informa qual é o canal.
+  if (ch.youtube_recipe === "studio") {
+    const me = (await fetch("https://www.googleapis.com/youtube/v3/channels?part=id&mine=true", {
+      headers: { authorization: `Bearer ${access_token}` },
+    }).then((r) => r.json())) as { items?: { id: string }[] };
+    const id = me.items?.[0]?.id;
+    if (!id) throw new Error("não consegui descobrir o ID do canal no YouTube");
+    return youtubeStudioUpload(ch, clip, file, id);
+  }
 
   // Receita "app": o que muda entre os uploads pelo app do celular (com alcance) e os da API (sem):
   // título sem "#Shorts" (vertical curto já vira Short), nome de arquivo e conteúdo alterado declarado.

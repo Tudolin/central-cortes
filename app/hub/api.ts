@@ -25,6 +25,7 @@ const publicChannel = (c: Channel) => {
     credentials: Object.keys(creds).filter((k) => !/^(youtube|tiktok)_/.test(k)),
     connections: { youtube: creds.youtube_account ?? null, tiktok: creds.tiktok_account ?? null },
     robot: robotStatus(c.id),
+    ytrobot: robotStatus(c.id, "youtube"),
   };
 };
 
@@ -432,6 +433,19 @@ route("POST", "/api/channels/:id/robot/adopt-main", robotAction(async (id) => {
   updateChannel(id, { tiktok_mode: "browser" });
 }));
 route("POST", "/api/channels/:id/robot/logout", robotAction(robotLogout));
+
+// Robô do YouTube Studio: mesma tela remota, sessão própria do canal. Com login salvo, o canal passa a postar por ele.
+route("POST", "/api/channels/:id/ytrobot/login", robotAction((id) => robotLoginStart(id, "youtube")));
+route("POST", "/api/channels/:id/ytrobot/finish", robotAction(async (id) => {
+  await robotLoginFinish(id, "youtube");
+  updateChannel(id, { youtube_recipe: "studio" });
+}));
+route("POST", "/api/channels/:id/ytrobot/cancel", robotAction((id) => robotLoginCancel(id, "youtube")));
+route("POST", "/api/channels/:id/ytrobot/adopt-main", robotAction(async (id) => {
+  await robotAdoptMain(id, "youtube");
+  updateChannel(id, { youtube_recipe: "studio" });
+}));
+route("POST", "/api/channels/:id/ytrobot/logout", robotAction((id) => robotLogout(id, "youtube")));
 
 // ---------- OAuth (YouTube / TikTok) ----------
 

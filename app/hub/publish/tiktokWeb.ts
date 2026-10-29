@@ -23,15 +23,25 @@ const UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?from=webapp";
 /** Tela remota do robô: mesmo host do painel, porta 10005 (Tailscale Serve). */
 export const robotScreenUrl = () => process.env.ROBOT_SCREEN_URL || settings.publicUrl.replace(/:\d+$/, "") + ":10005";
 
-class NeedsHuman extends Error {}
+export class NeedsHuman extends Error {}
+
+/** Sites em que o robô entra com a conta de cada canal: onde faz login e como sabe que ainda está deslogado. */
+export type RobotSite = "tiktok" | "youtube";
+const SITES: Record<RobotSite, { login: string; check: string; loggedOut: RegExp; name: string }> = {
+  tiktok: { login: "https://www.tiktok.com/login", check: UPLOAD_URL, loggedOut: /\/login/, name: "TikTok" },
+  youtube: {
+    login: "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fstudio.youtube.com%2F",
+    check: "https://studio.youtube.com/", loggedOut: /accounts\.google\.com/, name: "YouTube Studio",
+  },
+};
 
 const robotDir = () => {
   const dir = join(config.dataDir, "robot");
   mkdirSync(dir, { recursive: true });
   return dir;
 };
-const sessionPath = (channelId: string) => join(robotDir(), `tiktok-${channelId}.json`);
-const connect = () =>
+export const sessionPath = (channelId: string, site: RobotSite = "tiktok") => join(robotDir(), `${site}-${channelId}.json`);
+export const connect = () =>
   chromium.connectOverCDP(CDP, { timeout: 20_000 }).catch(() => {
     throw new Error("navegador do robô fora do ar (container cortes-browser)");
   });
@@ -39,62 +49,62 @@ const connect = () =>
 /** Logins em andamento: janela isolada aberta na tela remota esperando o usuário entrar na conta. */
 const pendingLogins = new Map<string, { browser: Browser; context: BrowserContext; page: Page; at: number }>();
 
-export function robotStatus(channelId: string) {
-  const p = sessionPath(channelId);
+export function robotStatus(channelId: string, site: RobotSite = "tiktok") {
+  const p = sessionPath(channelId, site);
   return {
     saved: existsSync(p) ? statSync(p).mtime.toISOString() : null,
-    pending: pendingLogins.has(channelId),
+    pending: pendingLogins.has(`${site}:${channelId}`),
   };
 }
 
-/** Abre na tela remota uma janela isolada na página de login do TikTok, só para este canal. */
-export async function robotLoginStart(channelId: string) {
-  await robotLoginCancel(channelId);
+/** Abre na tela remota uma janela isolada na página de login do site, só para este canal. */
+export async function robotLoginStart(channelId: string, site: RobotSite = "tiktok") {
+  await robotLoginCancel(channelId, site);
   const browser = await connect();
   const context = await browser.newContext({
     viewport: null,
-    ...(existsSync(sessionPath(channelId)) ? { storageState: sessionPath(channelId) } : {}),
+    ...(existsSync(sessionPath(channelId, site)) ? { storageState: sessionPath(channelId, site) } : {}),
   });
   const page = await context.newPage();
-  await page.goto("https://www.tiktok.com/login", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await page.goto(SITES[site].login, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
   await page.bringToFront().catch(() => {});
-  pendingLogins.set(channelId, { browser, context, page, at: Date.now() });
+  pendingLogins.set(`${site}:${channelId}`, { browser, context, page, at: Date.now() });
 }
 
 /** Confere que a janela está logada (o Studio abre sem pedir login) e guarda a sessão do canal. */
-export async function robotLoginFinish(channelId: string) {
-  const p = pendingLogins.get(channelId);
-  if (!p) throw new Error("Nenhum login em andamento: clique em \"Entrar no TikTok pelo robô\" primeiro");
-  await p.page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+export async function robotLoginFinish(channelId: string, site: RobotSite = "tiktok") {
+  const p = pendingLogins.get(`${site}:${channelId}`);
+  if (!p) throw new Error(`Nenhum login em andamento: clique em "Entrar no ${SITES[site].name} pelo robô" primeiro`);
+  await p.page.goto(SITES[site].check, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await p.page.waitForTimeout(3000);
-  if (/\/login/.test(p.page.url())) throw new Error("Ainda não está logado: termine o login na tela remota e clique de novo");
-  await p.context.storageState({ path: sessionPath(channelId) });
-  await robotLoginCancel(channelId);
+  if (SITES[site].loggedOut.test(p.page.url())) throw new Error("Ainda não está logado: termine o login na tela remota e clique de novo");
+  await p.context.storageState({ path: sessionPath(channelId, site) });
+  await robotLoginCancel(channelId, site);
 }
 
-export async function robotLoginCancel(channelId: string) {
-  const p = pendingLogins.get(channelId);
-  pendingLogins.delete(channelId);
+export async function robotLoginCancel(channelId: string, site: RobotSite = "tiktok") {
+  const p = pendingLogins.get(`${site}:${channelId}`);
+  pendingLogins.delete(`${site}:${channelId}`);
   if (!p) return;
   await p.context.close().catch(() => {});
   await p.browser.close().catch(() => {});
 }
 
 /** Usa a conta já logada na janela principal do robô (como era antes das sessões por canal). */
-export async function robotAdoptMain(channelId: string) {
+export async function robotAdoptMain(channelId: string, site: RobotSite = "tiktok") {
   const browser = await connect();
   try {
     const main = browser.contexts()[0];
     if (!main) throw new Error("janela principal do robô não encontrada");
     const page = await main.newPage();
     try {
-      await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await page.goto(SITES[site].check, { waitUntil: "domcontentloaded", timeout: 60_000 });
       await page.waitForTimeout(3000);
-      if (/\/login/.test(page.url())) throw new Error("a janela principal do robô não está logada no TikTok");
+      if (SITES[site].loggedOut.test(page.url())) throw new Error(`a janela principal do robô não está logada no ${SITES[site].name}`);
     } finally {
       await page.close().catch(() => {});
     }
-    await main.storageState({ path: sessionPath(channelId) });
+    await main.storageState({ path: sessionPath(channelId, site) });
   } finally {
     await browser.close().catch(() => {});
   }
@@ -215,8 +225,8 @@ export async function tiktokStudioItems(channelId: string, maxPages = 6): Promis
   }
 }
 
-export function robotLogout(channelId: string) {
-  rmSync(sessionPath(channelId), { force: true });
+export function robotLogout(channelId: string, site: RobotSite = "tiktok") {
+  rmSync(sessionPath(channelId, site), { force: true });
 }
 
 async function needsHumanCheck(page: Page) {
