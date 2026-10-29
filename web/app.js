@@ -755,7 +755,8 @@ function settingField(key, label, { secret = false, placeholder = "" } = {}) {
 /** Guias passo a passo de cada integração (abre/fecha e lembra o estado entre re-renders). */
 const openGuides = new Set();
 const guide = (id, steps) =>
-  `<details class="guide" data-guide="${id}" ${openGuides.has(id) ? "open" : ""}><summary>📖 Como obter as credenciais</summary><ol>${steps.map((s) => `<li>${s}</li>`).join("")}</ol></details>`;
+  `<details class="guide" data-guide="${id}" ${openGuides.has(id) ? "open" : ""}><summary>📖 Como obter as credenciais</summary>${
+    Array.isArray(steps) ? `<ol>${steps.map((s) => `<li>${s}</li>`).join("")}</ol>` : steps}</details>`;
 
 const link = (url, label = url.replace(/^https:\/\//, "")) => `<a href="${url}" target="_blank" rel="noopener">${label}</a>`;
 
