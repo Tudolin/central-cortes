@@ -11,6 +11,7 @@ if (config.role === "hub" || config.role === "all") {
   const { startTelegram } = await import("./hub/telegram.ts");
   const { startDiskGuard } = await import("./hub/disk.ts");
   const { startMetrics } = await import("./hub/metrics.ts");
+  const { startInstagram } = await import("./hub/instagram.ts");
   startServer();
   // HUB_PASSIVE=1: só serve o painel (prévia local com cópia do banco; nunca publica nada).
   if (process.env.HUB_PASSIVE !== "1") {
@@ -18,6 +19,7 @@ if (config.role === "hub" || config.role === "all") {
     startScheduler();
     startDiskGuard();
     startMetrics();
+    startInstagram();
     void startTelegram();
   }
 }

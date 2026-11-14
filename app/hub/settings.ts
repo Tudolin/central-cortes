@@ -13,6 +13,17 @@ export const SETTING_KEYS = {
   youtube_client_secret: { env: "YOUTUBE_CLIENT_SECRET", secret: true },
   tiktok_client_key: { env: "TIKTOK_CLIENT_KEY", secret: false },
   tiktok_client_secret: { env: "TIKTOK_CLIENT_SECRET", secret: true },
+  // Posts de foto no Instagram (hub/instagram.ts). Os nomes do .env são os do antigo ig-agent.
+  instagram_user_id: { env: "IG_USER_ID", secret: false },
+  instagram_access_token: { env: "IG_ACCESS_TOKEN", secret: true },
+  facebook_app_id: { env: "FB_APP_ID", secret: false },
+  facebook_app_secret: { env: "FB_APP_SECRET", secret: true },
+  templated_api_key: { env: "TEMPLATED_API_KEY", secret: true },
+  templated_template_feed: { env: "TEMPLATE_ID_FEED", secret: false },
+  templated_template_story: { env: "TEMPLATE_ID_STORY", secret: false },
+  deepseek_api_key: { env: "DEEPSEEK_API_KEY", secret: true },
+  instagram_brand: { env: "IG_BRAND", secret: false },
+  instagram_media_url: { env: "IG_MEDIA_URL", secret: false },
 } as const;
 export type SettingKey = keyof typeof SETTING_KEYS;
 
@@ -23,7 +34,7 @@ export function readSetting(key: SettingKey): { value: string; source: "dashboar
   return env ? { value: env, source: "env" } : { value: "", source: "" };
 }
 
-const read = (key: SettingKey) => readSetting(key).value;
+export const read = (key: SettingKey) => readSetting(key).value;
 
 /** null/"" remove (volta para o .env, se houver). */
 export function writeSettings(values: Partial<Record<SettingKey, string | null>>) {

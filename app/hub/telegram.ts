@@ -8,10 +8,26 @@ import { explainTikTokError, tiktokCreatorInfo, type CreatorInfo } from "./publi
 import { approve, needsTikTokChoices, reject } from "./schedule.ts";
 
 /**
- * Bot de aprovação via long polling (não precisa de URL pública nem conflita com o webhook do ig-agent,
- * desde que seja um bot próprio). Só aceita comandos do TELEGRAM_CHAT_ID configurado.
+ * Bot de aprovação via long polling (não precisa de URL pública; tem de ser um bot próprio, sem webhook).
+ * Só aceita comandos do TELEGRAM_CHAT_ID configurado.
  */
 const enabled = () => !!(settings.telegram.token && settings.telegram.chatId);
+
+export interface TgMessage {
+  chat: { id: number; title?: string; first_name?: string; last_name?: string; username?: string };
+  text?: string;
+  caption?: string;
+  photo?: { file_id: string; width: number; height: number }[];
+}
+/**
+ * Extensões do bot (hoje: posts de foto do Instagram). Ficam aqui como ganchos para o módulo se registrar
+ * sem o bot depender dele. `message` devolve true quando tratou a mensagem; `callback` devolve o texto do aviso.
+ */
+export const tgExtensions: {
+  prefix: string;
+  message: (m: TgMessage) => Promise<boolean>;
+  callback: (action: string, id: number, arg: string | undefined) => Promise<string>;
+}[] = [];
 const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
 const fmtWhen = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString("pt-BR", { timeZone: config.timezone, weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -20,6 +36,17 @@ const dur = (c: Clip) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 const studioLink = (clipId: number) => (settings.publicUrl.startsWith("https://") ? `${settings.publicUrl}/#clip=${clipId}` : "");
+
+export const tgEnabled = enabled;
+export const tgCall = <T = any>(method: string, body: Record<string, unknown> | FormData) => call<T>(method, body);
+
+/** Baixa um arquivo enviado ao bot (foto, documento). */
+export async function tgDownload(fileId: string): Promise<Buffer> {
+  const { file_path } = await call<{ file_path: string }>("getFile", { file_id: fileId });
+  const r = await fetch(`https://api.telegram.org/file/bot${settings.telegram.token}/${file_path}`, { signal: AbortSignal.timeout(120_000) });
+  if (!r.ok) throw new Error(`Telegram: download da foto falhou (HTTP ${r.status})`);
+  return Buffer.from(await r.arrayBuffer());
+}
 
 async function call<T = any>(method: string, body: Record<string, unknown> | FormData): Promise<T> {
   const r = await fetch(`https://api.telegram.org/bot${settings.telegram.token}/${method}`, {
@@ -231,6 +258,8 @@ async function onCallback(q: { id: string; data?: string; message?: { chat: { id
   const msgId = q.message?.message_id;
   let text = "";
   try {
+    const ext = tgExtensions.find((x) => action.startsWith(x.prefix));
+    if (ext) text = await ext.callback(action, id, arg);
     if (action === "ap" || action === "now") {
       const clip = getClip(id);
       const ch = clip && getChannel(getJob(clip.job_id)!.channel_id);
@@ -298,7 +327,7 @@ async function onCallback(q: { id: string; data?: string; message?: { chat: { id
  */
 export const chatCandidates = new Map<string, { id: string; name: string; at: string }>();
 
-async function onMessage(m: { chat: { id: number; title?: string; first_name?: string; last_name?: string; username?: string }; text?: string }) {
+async function onMessage(m: TgMessage) {
   const chat = String(m.chat.id);
   if (!settings.telegram.chatId) {
     const name = m.chat.title || [m.chat.first_name, m.chat.last_name].filter(Boolean).join(" ") || m.chat.username || chat;
@@ -308,6 +337,13 @@ async function onMessage(m: { chat: { id: number; title?: string; first_name?: s
     return;
   }
   if (chat !== settings.telegram.chatId) return;
+  for (const ext of tgExtensions) {
+    const handled = await ext.message(m).catch(async (e: Error) => {
+      await send(`⚠️ ${esc(e.message).slice(0, 1500)}`);
+      return true;
+    });
+    if (handled) return;
+  }
   const cmd = (m.text ?? "").split(/[\s@]/)[0];
   if (cmd === "/agenda") {
     const next = all<Clip & { channel: string }>(
@@ -324,7 +360,7 @@ async function onMessage(m: { chat: { id: number; title?: string; first_name?: s
       `📊 Fila: ${count("SELECT COUNT(*) n FROM jobs WHERE status IN ('QUEUED','DOWNLOADING','TRANSCRIBING','ANALYZING')")} vídeos · ` +
         `${count("SELECT COUNT(*) n FROM clips WHERE status IN ('RENDER_QUEUED','RENDERING')")} renders\n` +
         `👀 Revisão: ${count("SELECT COUNT(*) n FROM clips WHERE status = 'PENDING_REVIEW'")} · 🗓 Agendados: ${count("SELECT COUNT(*) n FROM clips WHERE status = 'SCHEDULED'")}\n` +
-        `🖥 Workers: ${online.length ? online.map((x) => `${esc(x.name)} (${esc(x.task || "ocioso")})`).join(", ") : "nenhum online"}\n\n/agenda — próximas postagens`,
+        `🖥 Workers: ${online.length ? online.map((x) => `${esc(x.name)} (${esc(x.task || "ocioso")})`).join(", ") : "nenhum online"}\n\n/agenda — próximas postagens\n/novopost — post de foto no Instagram`,
     );
   }
 }
