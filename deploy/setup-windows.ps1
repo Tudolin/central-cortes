@@ -28,6 +28,12 @@ $envFile = Join-Path $root ".env"
 
 function Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Has($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
+# O programa configurado no .env (ou o nome padrao) existe de fato? Um .env copiado do exemplo traz FFMPEG_BIN=ffmpeg mesmo sem ffmpeg instalado.
+function Works($key, $default) {
+  $bin = Get-Env $key
+  if (-not $bin) { $bin = $default }
+  Has $bin
+}
 function Refresh-Path {
   $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
 }
@@ -105,7 +111,7 @@ function Find-Tool($dir, $name) {
   if (-not (Test-Path $dir)) { return $null }
   Get-ChildItem $dir -Recurse -Filter $name | Select-Object -First 1 -ExpandProperty FullName
 }
-if (-not ((Get-Env "FFMPEG_BIN") -or (Has "ffmpeg"))) {
+if (-not ((Works "FFMPEG_BIN" "ffmpeg") -and (Works "FFPROBE_BIN" "ffprobe"))) {
   if (-not (Find-Tool $ffDir "ffmpeg.exe")) {
     $zip = Join-Path $env:TEMP "ffmpeg-essentials.zip"
     Download "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" $zip
@@ -120,7 +126,7 @@ if (-not ((Get-Env "FFMPEG_BIN") -or (Has "ffmpeg"))) {
 }
 
 Step "yt-dlp"
-if (-not ((Get-Env "YTDLP_BIN") -or (Has "yt-dlp"))) {
+if (-not (Works "YTDLP_BIN" "yt-dlp")) {
   $ytdlpExe = Join-Path $toolsDir "yt-dlp.exe"
   if (-not (Test-Path $ytdlpExe)) {
     New-Item -ItemType Directory -Force $toolsDir | Out-Null
@@ -137,7 +143,8 @@ Step "whisper.cpp"
 $whisperDir = Join-Path $root "tools\whisper"
 function Find-Whisper { Find-Tool $whisperDir "whisper-cli.exe" }
 $whisperExe = Find-Whisper
-if (-not ($whisperExe -or (Get-Env "WHISPER_BIN") -or (Has "whisper-cli"))) {
+$whisperOk = Works "WHISPER_BIN" "whisper-cli"
+if (-not ($whisperExe -or $whisperOk)) {
   # Os nomes dos .zip mudam entre versoes: procura nas ultimas releases; se a API falhar, usa uma versao conhecida.
   $wanted = if ($gpu) { @("^whisper-cublas-12.*-bin-x64\.zip$", "^whisper-bin-x64\.zip$") } else { @("^whisper-bin-x64\.zip$") }
   $url = $null
@@ -217,9 +224,10 @@ if ($mode -eq "worker") {
   Set-Env "HOST" "127.0.0.1"
   Set-Env "PORT" "8080"
 }
-if ($whisperExe) { Set-Env "WHISPER_BIN" $whisperExe }
-if ($ffmpegExe) { Set-Env "FFMPEG_BIN" $ffmpegExe; Set-Env "FFPROBE_BIN" $ffprobeExe }
-if ($ytdlpExe) { Set-Env "YTDLP_BIN" $ytdlpExe }
+# Caminhos baixados para tools\ substituem um valor do .env que nao funciona.
+if ($whisperExe -and -not $whisperOk) { Set-Env "WHISPER_BIN" $whisperExe -Force }
+if ($ffmpegExe) { Set-Env "FFMPEG_BIN" $ffmpegExe -Force; Set-Env "FFPROBE_BIN" $ffprobeExe -Force }
+if ($ytdlpExe) { Set-Env "YTDLP_BIN" $ytdlpExe -Force }
 Set-Env "WHISPER_MODEL" $modelRel
 Set-Env "WHISPER_THREADS" ([Math]::Max(4, [Math]::Min(16, [Environment]::ProcessorCount - 2)))
 if ($gpu) { Set-Env "FFMPEG_VCODEC" "h264_nvenc" }
