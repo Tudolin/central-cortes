@@ -71,25 +71,71 @@ Write-Host "Central de Cortes - configurando como '$mode' em $root"
 # ---------- programas ----------
 Step "Node.js"
 function Node-Major { if (Has "node") { [int](node -p "process.versions.node.split('.')[0]") } else { 0 } }
-$found = if (Has "node") { "a versao instalada e a $(node -v)" } else { "nao ha Node instalado" }
-if ((Node-Major) -lt 24) { Winget-Install "OpenJS.NodeJS.LTS" "o Node.js 24 ou mais novo ($found)" "https://nodejs.org, botao de download do instalador .msi" }
+function Download($url, $dest) {
+  Write-Host "Baixando $url"
+  curl.exe -fL --retry 3 -o $dest $url
+  if ($LASTEXITCODE -ne 0) { throw "Falha ao baixar $url" }
+}
+if ((Node-Major) -lt 24) {
+  if (Has "winget") { Winget-Install "OpenJS.NodeJS.LTS" "o Node.js" "https://nodejs.org" }
+  else {
+    # Sem winget: instalador oficial (.msi) da versao LTS mais nova. O Windows pede permissao de administrador.
+    $lts = (Invoke-RestMethod "https://nodejs.org/dist/index.json") | Where-Object { $_.lts -and ([int]($_.version -replace "^v(\d+)\..*", '$1')) -ge 24 } | Select-Object -First 1
+    if (-not $lts) { throw "Nao achei uma versao LTS do Node.js para baixar. Instale manualmente por https://nodejs.org e rode de novo." }
+    $msi = Join-Path $env:TEMP "node-$($lts.version)-x64.msi"
+    Download "https://nodejs.org/dist/$($lts.version)/node-$($lts.version)-x64.msi" $msi
+    Write-Host "Instalando o Node.js $($lts.version) (confirme a janela de permissao do Windows)..."
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /passive /norestart" -Wait -PassThru
+    Remove-Item -Force $msi -ErrorAction SilentlyContinue
+    if ($p.ExitCode -ne 0) { throw "A instalacao do Node.js nao terminou (codigo $($p.ExitCode)). Instale manualmente por https://nodejs.org e rode de novo." }
+    Refresh-Path
+    $env:Path = "C:\Program Files\nodejs;" + $env:Path
+  }
+}
 if ((Node-Major) -lt 24) { throw "Node.js instalado, mas esta janela ainda nao o enxerga. Abra um PowerShell novo e rode o script de novo." }
 Write-Host "Node $(node -v)"
 
+# ffmpeg e yt-dlp: versoes portateis em tools\ (nao dependem do winget nem de permissao de administrador).
+$toolsDir = Join-Path $root "tools"
+$ffmpegExe = $null; $ffprobeExe = $null; $ytdlpExe = $null
+
 Step "ffmpeg"
-if (-not ((Get-Env "FFMPEG_BIN") -or (Has "ffmpeg"))) { Winget-Install "Gyan.FFmpeg" "o ffmpeg" "https://www.gyan.dev/ffmpeg/builds, e ponha a pasta bin no PATH ou os caminhos em FFMPEG_BIN e FFPROBE_BIN no .env" }
+$ffDir = Join-Path $toolsDir "ffmpeg"
+function Find-Tool($dir, $name) {
+  if (-not (Test-Path $dir)) { return $null }
+  Get-ChildItem $dir -Recurse -Filter $name | Select-Object -First 1 -ExpandProperty FullName
+}
+if (-not ((Get-Env "FFMPEG_BIN") -or (Has "ffmpeg"))) {
+  if (-not (Find-Tool $ffDir "ffmpeg.exe")) {
+    $zip = Join-Path $env:TEMP "ffmpeg-essentials.zip"
+    Download "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" $zip
+    New-Item -ItemType Directory -Force $ffDir | Out-Null
+    Expand-Archive -Force $zip $ffDir
+    Remove-Item -Force $zip
+  }
+  $ffmpegExe = Find-Tool $ffDir "ffmpeg.exe"
+  $ffprobeExe = Find-Tool $ffDir "ffprobe.exe"
+  if (-not ($ffmpegExe -and $ffprobeExe)) { throw "ffmpeg.exe/ffprobe.exe nao vieram no pacote baixado." }
+  Write-Host $ffmpegExe
+}
+
 Step "yt-dlp"
-if (-not ((Get-Env "YTDLP_BIN") -or (Has "yt-dlp"))) { Winget-Install "yt-dlp.yt-dlp" "o yt-dlp" "https://github.com/yt-dlp/yt-dlp/releases, e ponha o yt-dlp.exe no PATH ou o caminho em YTDLP_BIN no .env" }
+if (-not ((Get-Env "YTDLP_BIN") -or (Has "yt-dlp"))) {
+  $ytdlpExe = Join-Path $toolsDir "yt-dlp.exe"
+  if (-not (Test-Path $ytdlpExe)) {
+    New-Item -ItemType Directory -Force $toolsDir | Out-Null
+    Download "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" "$ytdlpExe.part"
+    Move-Item -Force "$ytdlpExe.part" $ytdlpExe
+  }
+  Write-Host $ytdlpExe
+}
 
 $gpu = Has "nvidia-smi"
 if ($gpu) { Write-Host "`nPlaca NVIDIA detectada: transcricao e render vao usar a GPU." }
 
 Step "whisper.cpp"
 $whisperDir = Join-Path $root "tools\whisper"
-function Find-Whisper {
-  if (-not (Test-Path $whisperDir)) { return $null }
-  Get-ChildItem $whisperDir -Recurse -Filter "whisper-cli.exe" | Select-Object -First 1 -ExpandProperty FullName
-}
+function Find-Whisper { Find-Tool $whisperDir "whisper-cli.exe" }
 $whisperExe = Find-Whisper
 if (-not ($whisperExe -or (Get-Env "WHISPER_BIN") -or (Has "whisper-cli"))) {
   # Os nomes dos .zip mudam entre versoes: procura nas ultimas releases; se a API falhar, usa uma versao conhecida.
@@ -172,6 +218,8 @@ if ($mode -eq "worker") {
   Set-Env "PORT" "8080"
 }
 if ($whisperExe) { Set-Env "WHISPER_BIN" $whisperExe }
+if ($ffmpegExe) { Set-Env "FFMPEG_BIN" $ffmpegExe; Set-Env "FFPROBE_BIN" $ffprobeExe }
+if ($ytdlpExe) { Set-Env "YTDLP_BIN" $ytdlpExe }
 Set-Env "WHISPER_MODEL" $modelRel
 Set-Env "WHISPER_THREADS" ([Math]::Max(4, [Math]::Min(16, [Environment]::ProcessorCount - 2)))
 if ($gpu) { Set-Env "FFMPEG_VCODEC" "h264_nvenc" }
