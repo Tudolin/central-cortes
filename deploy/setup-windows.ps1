@@ -31,11 +31,13 @@ function Has($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 function Refresh-Path {
   $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
 }
-function Winget-Install($id) {
-  if (-not (Has "winget")) { throw "winget nao encontrado. Instale o 'Instalador de Aplicativo' pela Microsoft Store e rode de novo." }
+function Winget-Install($id, $what, $manual) {
+  if (-not (Has "winget")) { throw "Falta $what e este Windows nao tem o winget para instalar sozinho. Instale manualmente ($manual), abra um PowerShell novo e rode este script de novo." }
   winget install --id $id -e --accept-source-agreements --accept-package-agreements
   Refresh-Path
 }
+# Mesmo PATH que o worker usa ao iniciar (deploy\worker-start.ps1): o Node pode estar instalado sem estar no PATH desta janela.
+$env:Path = "C:\Program Files\nodejs;" + $env:Path
 
 # ---------- .env: le o que existe e so acrescenta o que falta ----------
 $envLines = New-Object System.Collections.Generic.List[string]
@@ -63,21 +65,21 @@ $mode = $Role
 if (-not $mode) { $mode = Get-Env "ROLE" }
 if (-not $mode) { $mode = "all" }
 if ($mode -notin @("all", "worker")) { throw "ROLE=$mode no .env: este script configura 'all' (um PC so) ou 'worker'. O hub separado roda em Docker (veja o README)." }
+if ("$HubUrl $WorkerToken" -match "IP_DO_HUB|SEGREDO") { throw "Troque IP_DO_HUB e SEGREDO pelos valores reais (ou rode sem parametros para usar o .env que ja existe)." }
 Write-Host "Central de Cortes - configurando como '$mode' em $root"
 
 # ---------- programas ----------
 Step "Node.js"
-$nodeOk = $false
-if (Has "node") { $nodeOk = ([int](node -p "process.versions.node.split('.')[0]")) -ge 24 }
-if (-not $nodeOk) { Winget-Install "OpenJS.NodeJS.LTS" }
-if (-not (Has "node")) { throw "Node.js instalado, mas ainda fora do PATH. Feche esta janela, abra outra e rode o script de novo." }
-if (([int](node -p "process.versions.node.split('.')[0]")) -lt 24) { throw "Node.js $(node -v) encontrado; e preciso o 24 ou mais novo (https://nodejs.org)." }
+function Node-Major { if (Has "node") { [int](node -p "process.versions.node.split('.')[0]") } else { 0 } }
+$found = if (Has "node") { "a versao instalada e a $(node -v)" } else { "nao ha Node instalado" }
+if ((Node-Major) -lt 24) { Winget-Install "OpenJS.NodeJS.LTS" "o Node.js 24 ou mais novo ($found)" "https://nodejs.org, botao de download do instalador .msi" }
+if ((Node-Major) -lt 24) { throw "Node.js instalado, mas esta janela ainda nao o enxerga. Abra um PowerShell novo e rode o script de novo." }
 Write-Host "Node $(node -v)"
 
 Step "ffmpeg"
-if (-not ((Get-Env "FFMPEG_BIN") -or (Has "ffmpeg"))) { Winget-Install "Gyan.FFmpeg" }
+if (-not ((Get-Env "FFMPEG_BIN") -or (Has "ffmpeg"))) { Winget-Install "Gyan.FFmpeg" "o ffmpeg" "https://www.gyan.dev/ffmpeg/builds, e ponha a pasta bin no PATH ou os caminhos em FFMPEG_BIN e FFPROBE_BIN no .env" }
 Step "yt-dlp"
-if (-not ((Get-Env "YTDLP_BIN") -or (Has "yt-dlp"))) { Winget-Install "yt-dlp.yt-dlp" }
+if (-not ((Get-Env "YTDLP_BIN") -or (Has "yt-dlp"))) { Winget-Install "yt-dlp.yt-dlp" "o yt-dlp" "https://github.com/yt-dlp/yt-dlp/releases, e ponha o yt-dlp.exe no PATH ou o caminho em YTDLP_BIN no .env" }
 
 $gpu = Has "nvidia-smi"
 if ($gpu) { Write-Host "`nPlaca NVIDIA detectada: transcricao e render vao usar a GPU." }
@@ -146,7 +148,7 @@ if (-not $LocalAi -and -not (Get-Env "ANTHROPIC_API_KEY") -and (Get-Env "LOCAL_A
 if ($LocalAi) {
   Set-Env "LOCAL_AI" "always" -Force
   $ollama = Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"
-  if (-not (Test-Path $ollama)) { Winget-Install "Ollama.Ollama" }
+  if (-not (Test-Path $ollama)) { Winget-Install "Ollama.Ollama" "o Ollama" "https://ollama.com/download" }
   $model = Get-Env "LOCAL_MODEL"
   if (-not $model) { $model = "qwen3:8b" }
   if (Test-Path $ollama) {
