@@ -16,7 +16,8 @@ services:
       - "127.0.0.1:8095:8095"
       - "${TAILSCALE_IP:-127.0.0.1}:8095:8095"
       # Fotos dos posts do Instagram (só /public/ig/*): é aqui que o túnel público aponta (deploy/ig-media-tunnel.sh).
-      - "127.0.0.1:8096:8096"
+      # No host é a 8196 (a 8096 é a porta padrão do Jellyfin); se mudar, mude também IG_MEDIA_PORT no serviço do túnel.
+      - "127.0.0.1:8196:8096"
       # Tela remota do navegador do robô (KasmVNC do cortes-browser, que usa a rede deste container).
       - "127.0.0.1:3011:3000"
     volumes:

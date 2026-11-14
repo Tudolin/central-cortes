@@ -372,6 +372,8 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 @font-face { font-family: "Barlow SemiBold"; src: url("/fonts/Barlow-SemiBold.ttf") format("truetype"); font-display: swap; }
 /* Canais em telas médias: a coluna principal encolhe em vez de empurrar a página para o lado. */
 .channels { grid-template-columns: 240px minmax(0, 1fr); }
+/* No celular a lista de canais vai para cima: a regra acima vinha depois do @media e desfazia a coluna única. */
+@media (max-width: 900px) { .channels { grid-template-columns: minmax(0, 1fr); } }
 .integ-grid { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
 .integ { min-width: 0; }
 .guide code { word-break: break-all; }
