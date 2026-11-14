@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Túnel público só para as fotos dos posts do Instagram (a Meta e o Templated baixam a imagem por URL).
-# Abre um "quick tunnel" do Cloudflare para a porta das fotos do hub (IG_MEDIA_PORT, padrão 8096), que
+# Abre um "quick tunnel" do Cloudflare para a porta das fotos do hub (IG_MEDIA_PORT, padrão 8196 no host), que
 # responde apenas /public/ig/*, e grava o endereço em data/ig-media-url.txt. O hub lê esse arquivo a cada
 # uso, então não precisa reiniciar quando o endereço muda (ele muda sempre que o cloudflared reinicia).
 # Requer o cloudflared instalado. Como serviço: deploy/ig-media-tunnel.service.
 set -u
 cd "$(dirname "$0")/.."
-PORT="${IG_MEDIA_PORT:-8096}"
+PORT="${IG_MEDIA_PORT:-8196}"
 OUT="data/ig-media-url.txt"
 LOG="$(mktemp)"
 trap 'kill "${CF:-0}" 2>/dev/null; rm -f "$LOG" "$OUT"' EXIT

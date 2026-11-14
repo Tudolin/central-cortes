@@ -45,7 +45,7 @@ O hub usa, nesta ordem:
 2. o campo *URL pela qual a internet alcança este painel* da configuração;
 3. a URL pública do hub.
 
-**Túnel recomendado.** O hub abre uma porta separada (`IG_MEDIA_PORT`, 8096 no `compose.yaml`) que responde só `/public/ig/<nome>.jpg`. O script `deploy/ig-media-tunnel.sh` aponta um quick tunnel do Cloudflare para essa porta e grava o endereço no arquivo. Assim o painel e a API nunca ficam expostos à internet, e o hub acompanha a troca de endereço sem reiniciar.
+**Túnel recomendado.** O hub abre uma porta separada (8196 no host, pelo `compose.yaml`) que responde só `/public/ig/<nome>.jpg`. O script `deploy/ig-media-tunnel.sh` aponta um quick tunnel do Cloudflare para essa porta e grava o endereço no arquivo. Assim o painel e a API nunca ficam expostos à internet, e o hub acompanha a troca de endereço sem reiniciar.
 
 ```bash
 sudo sed "s#__APP_DIR__#$HOME/editor-cortes#g; s#__USER__#$USER#" deploy/ig-media-tunnel.service | sudo tee /etc/systemd/system/ig-media-tunnel.service
