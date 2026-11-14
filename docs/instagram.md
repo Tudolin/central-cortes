@@ -1,6 +1,6 @@
 # Posts de foto no Instagram
 
-A aba **Instagram** do painel cria, aprova e agenda posts de foto (Feed e Story) de uma conta do Instagram. É o antigo `ig-agent`, agora dentro do hub: mesmo banco, mesmo painel, mesmo bot do Telegram. Não tem relação com os cortes nem com os canais; a conta é uma só para o hub.
+A aba **Instagram** do painel cria, aprova e agenda posts de foto (Feed e Story) de uma conta do Instagram. É o antigo `ig-agent`, agora dentro do hub: mesmo banco, mesmo painel, mesmo bot do Telegram. A conta do Instagram é de um canal, como as do YouTube e do TikTok: cada canal conecta a sua, e cada post sai na conta do canal escolhido.
 
 ```
 foto + briefing ─► legenda (DeepSeek) ─► moldura (Templated.io) ─► aprovação ─► agenda ─► Instagram
@@ -9,9 +9,9 @@ foto + briefing ─► legenda (DeepSeek) ─► moldura (Templated.io) ─► a
 
 ## Como usar
 
-**Pelo painel:** aba Instagram → *Novo post* → escolha a foto (JPEG, até 8 MB), o formato e escreva o briefing. O post aparece em *Para aprovar* com a legenda editável; dali você publica na hora, agenda, troca de formato, pede outra legenda à IA ou rejeita.
+**Pelo painel:** aba Instagram → *Novo post* → escolha a conta, a foto (JPEG, até 8 MB), o formato e escreva o briefing. Com um canal selecionado na barra lateral, a aba mostra só a conta e os posts dele. O post aparece em *Para aprovar* com a legenda editável; dali você publica na hora, agenda, troca de formato, pede outra legenda à IA ou rejeita.
 
-**Pelo Telegram:** mande a foto ao bot da Central com o briefing na legenda da foto. O bot pergunta o formato e devolve o post pronto com os botões *Publicar agora*, *Agendar*, *Ajustar legenda* e *Rejeitar*. Para agendar, responda com a data: `agora`, `18:30`, `amanhã 9h`, `25/08 18:30`. O comando `/novopost` mostra essas instruções.
+**Pelo Telegram:** mande a foto ao bot da Central com o briefing na legenda da foto. O bot pergunta a conta (se houver mais de uma) e o formato, e devolve o post pronto com os botões *Publicar agora*, *Agendar*, *Ajustar legenda* e *Rejeitar*. Para agendar, responda com a data: `agora`, `18:30`, `amanhã 9h`, `25/08 18:30`. O comando `/novopost` mostra essas instruções.
 
 O que é decidido num lugar vale no outro: aprovar no painel tira os botões do chat.
 
@@ -19,21 +19,24 @@ Se a publicação falhar, o hub tenta de novo em 5, 20 e 60 minutos e depois avi
 
 ## Configuração
 
-Tudo fica em **Instagram → Configuração**. Só a conta é obrigatória.
+**A conta, por canal:** Configurações → selecione o canal → *Contas conectadas* → **Instagram**. Informe o ID do usuário do Instagram (IG User ID) e o token de longa duração; o hub confere os dois na Meta e passa a mostrar o @ da conta. No mesmo cartão ficam os IDs dos modelos de moldura do Templated (Feed e Story), que também são do canal.
+
+A voz da legenda vem do canal: nome, nicho, tom e instruções extras, os mesmos campos usados nos cortes.
+
+**O que vale para o hub todo:** aba Instagram → *Configuração geral*.
 
 | Bloco | Campos | Sem ele |
 |---|---|---|
-| Conta do Instagram | ID do usuário (IG User ID) e token de longa duração | não publica |
-| App da Meta | ID e segredo do app | o token não é renovado sozinho (ele vence em ~60 dias) |
-| Legenda por IA | chave do DeepSeek e o texto de marca e voz | o briefing vira a legenda e você edita à mão |
-| Moldura | chave do Templated.io e o ID do modelo de Feed e/ou Story | a foto é publicada como está |
+| Legenda por IA | chave do DeepSeek | o briefing vira a legenda e você edita à mão |
+| Moldura | chave do Templated.io | a foto é publicada como está |
+| App da Meta | ID e segredo do app | os tokens não são renovados sozinhos (vencem em ~60 dias) |
 | Endereço público | URL pela qual a internet alcança as fotos | a Meta não consegue baixar a imagem |
 
-Com ID e segredo do app salvos, o hub confere o token uma vez por dia e o renova quando faltam 10 dias ou menos.
+Com ID e segredo do app salvos, o hub confere o token de cada conta uma vez por dia e o renova quando faltam 10 dias ou menos.
 
 No modelo do Templated, a foto entra na camada chamada `photo`.
 
-Os mesmos valores podem vir do `.env` do hub, com os nomes que o `ig-agent` usava: `IG_USER_ID`, `IG_ACCESS_TOKEN`, `FB_APP_ID`, `FB_APP_SECRET`, `DEEPSEEK_API_KEY`, `TEMPLATED_API_KEY`, `TEMPLATE_ID_FEED`, `TEMPLATE_ID_STORY`. O que for salvo no painel tem prioridade.
+As chaves do hub também podem vir do `.env`: `FB_APP_ID`, `FB_APP_SECRET`, `DEEPSEEK_API_KEY`, `TEMPLATED_API_KEY`. O que for salvo no painel tem prioridade.
 
 ## Endereço público das fotos
 
@@ -67,7 +70,7 @@ Requer o `cloudflared` instalado. As fotos ficam em nomes de 32 caracteres aleat
    ```
 
 3. Instale o túnel das fotos (seção acima) e reinicie o hub.
-4. Na aba Instagram, preencha *Marca e voz* (o prompt do `ig-agent` ainda tinha os campos em branco) e clique em *Conferir token agora*.
+4. Na primeira subida com `IG_USER_ID` e `IG_ACCESS_TOKEN` no `.env`, o hub cria sozinho um canal com o nome do perfil e conecta a conta nele (com os modelos `TEMPLATE_ID_FEED`/`TEMPLATE_ID_STORY`). Em Configurações, preencha o nicho e o tom desse canal: é deles que sai a voz da legenda (o prompt do `ig-agent` tinha esses campos em branco).
 5. Faça um post de teste. Funcionando, desligue o serviço antigo:
 
    ```bash

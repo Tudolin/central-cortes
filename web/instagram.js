@@ -19,6 +19,7 @@ async function api(path, opts = {}) {
 
 let toast = (msg) => console.log(msg);
 let data = null;
+let ctx = { channels: [], channel: "" }; // canais do painel e o canal escolhido na barra lateral
 let filter = "ACTIVE";
 let configOpen = false;
 
@@ -34,26 +35,38 @@ const STATUS = {
 const TYPE = { FEED: "Feed", STORIES: "Story" };
 const FILTERS = { ACTIVE: ["DRAFT", "PENDING", "SCHEDULED", "PUBLISHING", "FAILED"], PUBLISHED: ["PUBLISHED"], ALL: Object.keys(STATUS) };
 
+const accountOf = (channelId) => data.accounts.find((a) => a.channel_id === channelId);
+/** Contas que a aba mostra: a do canal escolhido na barra lateral, ou todas. */
+const shownAccounts = () => data.accounts.filter((a) => !ctx.channel || a.channel_id === ctx.channel);
+
 function statusChips() {
   const s = data.status;
   const chip = (ok, yes, no) => `<span class="${ok ? "ok-dot" : "muted"}">${ok ? yes : no}</span>`;
-  let token = "";
-  if (s.token.error) token = `<span class="tag bad" title="${esc(s.token.error)}">token com problema</span>`;
-  else if (s.token.expiresAt) token = `<span class="muted">token vale até ${new Date(s.token.expiresAt).toLocaleDateString("pt-BR")} (renova sozinho)</span>`;
-  return `<div class="ig-chips">
-    ${chip(s.account, "Conta conectada", "Conta não conectada")}
+  const accounts = shownAccounts().map((a) => {
+    const frame = [a.frame.FEED && "Feed", a.frame.STORIES && "Story"].filter(Boolean).join(" e ");
+    const token = a.token?.error ? ` <span class="tag bad" title="${esc(a.token.error)}">token com problema</span>`
+      : a.token?.expiresAt ? ` <span class="muted">· token até ${new Date(a.token.expiresAt).toLocaleDateString("pt-BR")}</span>` : "";
+    return `<div class="ig-account"><span class="ok-dot"><b>${esc(a.name)}</b> ${esc(a.account)}</span>
+      <span class="muted">${frame ? `moldura em ${frame}` : "sem moldura"}</span>${token}</div>`;
+  }).join("");
+  const none = ctx.channel
+    ? `${esc(ctx.channels.find((c) => c.id === ctx.channel)?.name ?? "Este canal")} não tem conta do Instagram conectada.`
+    : "Nenhum canal tem conta do Instagram conectada.";
+  return `${accounts || `<div class="card ig-empty">${none} Conecte em <b>Configurações → Contas conectadas → Instagram</b>, com o canal selecionado.</div>`}
+  <div class="ig-chips">
     ${chip(s.ai, "Legenda por IA", "Sem IA: a legenda é escrita à mão")}
-    ${chip(s.frame.FEED || s.frame.STORIES, `Moldura: ${[s.frame.FEED && "Feed", s.frame.STORIES && "Story"].filter(Boolean).join(" e ")}`, "Sem moldura: a foto vai como está")}
     ${chip(!!s.mediaBase, "Endereço público definido", "Falta o endereço público das fotos")}
     ${chip(s.telegram, "Bot do Telegram ativo", "Bot do Telegram desligado")}
-    ${token}
   </div>`;
 }
 
 function composer() {
+  const accounts = shownAccounts();
+  if (!accounts.length) return "";
   return `<form class="card ig-new" id="ig-new">
     <h3 class="integ-title">Novo post</h3>
     <div class="ig-new-grid">
+      <label class="full">Conta<select name="channel">${accounts.map((a) => `<option value="${esc(a.channel_id)}">${esc(a.name)} · ${esc(a.account)}</option>`).join("")}</select></label>
       <label>Foto (JPEG, até 8 MB)<input type="file" name="photo" accept="image/jpeg" required></label>
       <label>Formato<select name="type"><option value="FEED">Feed</option><option value="STORIES">Story</option></select></label>
       <label class="full">Briefing${data.status.ai ? " (a IA escreve a legenda a partir dele)" : " (vira a legenda; edite depois)"}
@@ -78,6 +91,7 @@ function postCard(p) {
   return `<article class="card ig-post" data-ig="${p.id}">
     <div class="ig-img ${story ? "story" : ""}">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : `<span class="muted">foto removida</span>`}</div>
     <div class="ig-body">
+      <div class="muted ig-who">${esc(accountOf(p.channel_id)?.name ?? ctx.channels.find((c) => c.id === p.channel_id)?.name ?? "sem conta")} ${esc(accountOf(p.channel_id)?.account ?? "")}</div>
       <div class="ig-head"><b>#${p.id} · ${TYPE[p.media_type] ?? p.media_type}</b><span class="tag ${cls}">${label}</span>
         ${p.permalink ? `<a href="${esc(p.permalink)}" target="_blank" rel="noopener">abrir no Instagram</a>` : ""}</div>
       ${info ? `<div class="muted help">${esc(info)}</div>` : ""}
@@ -109,37 +123,70 @@ function field(key, label, { secret = false, placeholder = "", area = false } = 
 }
 
 function configCard() {
-  return `<details class="card ig-config" id="ig-config" ${configOpen || !data.status.account ? "open" : ""}>
-    <summary><b>Configuração</b> <span class="muted">conta, IA da legenda, moldura e endereço público</span></summary>
+  return `<details class="card ig-config" id="ig-config" ${configOpen ? "open" : ""}>
+    <summary><b>Configuração geral</b> <span class="muted">IA da legenda, moldura, renovação de token e endereço público (vale para todas as contas)</span></summary>
     <form class="form" id="ig-settings">
-      <h3>Conta do Instagram (Meta)</h3>
-      ${field("instagram_user_id", "ID do usuário do Instagram (IG User ID)")}
-      ${field("instagram_access_token", "Token de acesso de longa duração", { secret: true })}
-      ${field("facebook_app_id", "ID do app da Meta (para renovar o token sozinho)")}
-      ${field("facebook_app_secret", "Segredo do app da Meta", { secret: true })}
+      <div class="muted help full">A conta do Instagram e os modelos de moldura são de cada canal: ficam em <b>Configurações → Contas conectadas → Instagram</b>.
+        A voz da legenda vem do nicho e do tom do canal.</div>
       <h3>Legenda por IA (opcional)</h3>
       ${field("deepseek_api_key", "Chave da API do DeepSeek", { secret: true })}
-      ${field("instagram_brand", "Marca e voz (a IA segue isto em toda legenda)", { area: true, placeholder: "Nome da marca, o que vende, tom de voz, o que nunca dizer. Ex.: Casa das Massas — massas frescas artesanais; tom caseiro e direto, sem formalidade." })}
       <h3>Moldura pelo Templated.io (opcional)</h3>
       ${field("templated_api_key", "Chave da API do Templated", { secret: true })}
-      ${field("templated_template_feed", "ID do modelo de Feed (1080×1080)")}
-      ${field("templated_template_story", "ID do modelo de Story (1080×1920)")}
-      <div class="muted help full">A foto entra na camada chamada <code>photo</code> do modelo.</div>
+      <h3>App da Meta (renova os tokens sozinho)</h3>
+      ${field("facebook_app_id", "ID do app da Meta")}
+      ${field("facebook_app_secret", "Segredo do app da Meta", { secret: true })}
       <h3>Endereço público das fotos</h3>
       ${field("instagram_media_url", "URL pela qual a internet alcança este painel", { placeholder: data.status.mediaBase || "https://…" })}
       <div class="muted help full">A Meta (e o Templated) baixam a foto por URL, então o endereço precisa abrir de fora da sua rede, com https.
         Em uso agora: <code>${esc(data.status.mediaBase || "nenhum")}</code>. Em branco, vale a URL pública do hub; com o túnel
         <code>deploy/ig-media-tunnel.sh</code> rodando, vale o endereço do túnel. Só as fotos dos posts ficam abertas, em nomes impossíveis de adivinhar.</div>
       <div class="full ig-actions"><button class="btn primary" type="submit">Salvar configuração</button>
-        <button class="btn" type="button" data-act="token">Conferir token agora</button></div>
+        <button class="btn" type="button" data-act="token">Conferir tokens agora</button></div>
     </form>
   </details>`;
+}
+
+/**
+ * Cartão do Instagram em Configurações → Contas conectadas: a conta do canal, como YouTube e TikTok.
+ * `ch` é o canal selecionado (com `connections.instagram` e `instagram` vindos de /api/state).
+ */
+export function instagramCard(ch) {
+  const acct = ch?.connections?.instagram;
+  const ig = ch?.instagram ?? {};
+  return `<form class="integ" data-ig-account>
+    <div class="integ-head"><b>◎ Instagram</b>
+      ${ch ? (acct ? `<span class="ok-dot">${esc(ch.name)}: ${esc(acct)}</span>` : `<span class="muted">${esc(ch.name)}: não conectado</span>`) : ""}</div>
+    <div class="muted help">Publica posts de foto (Feed e Story) na conta do canal, pela aba Instagram ou pelo bot do Telegram. Cada canal conecta a própria conta.</div>
+    <details class="guide"><summary>📖 Como obter as credenciais</summary><ol>
+      <li>A conta do Instagram precisa ser <b>profissional</b> (comercial ou criador) e estar ligada a uma <b>Página do Facebook</b>.</li>
+      <li>Em <code>developers.facebook.com</code>, crie um app e gere um token de usuário com a permissão de publicar conteúdo (<code>instagram_content_publish</code>).</li>
+      <li>Troque esse token por um de <b>longa duração</b> (vale cerca de 60 dias).</li>
+      <li>O <b>ID do usuário do Instagram</b> aparece em <code>/me/accounts?fields=instagram_business_account</code>.</li>
+      <li>Para o token se renovar sozinho, salve o ID e o segredo do app na aba Instagram → Configuração geral.</li>
+    </ol></details>
+    ${ch ? `
+    <label>ID do usuário do Instagram (IG User ID)<input name="user_id" autocomplete="off" value="${esc(ig.user_id)}"></label>
+    <label>Token de acesso de longa duração<input name="token" type="password" autocomplete="off" placeholder="${acct ? "salvo — em branco mantém" : ""}"></label>
+    <label>Modelo de moldura do Feed no Templated (opcional)<input name="template_feed" autocomplete="off" value="${esc(ig.template_feed)}"></label>
+    <label>Modelo de moldura do Story no Templated (opcional)<input name="template_story" autocomplete="off" value="${esc(ig.template_story)}"></label>
+    <div class="actions">
+      <button class="btn small primary" type="submit">${acct ? "Salvar" : "Conectar"} conta de ${esc(ch.name)}</button>
+      ${acct ? `<button class="btn small danger" type="button" data-disconnect="instagram">Desconectar</button>` : ""}
+    </div>` : ""}
+  </form>`;
+}
+
+/** Envio do cartão acima: o hub confere ID e token na Meta e devolve o @ da conta. */
+export async function saveInstagramAccount(form, channelId) {
+  const body = Object.fromEntries([...form.querySelectorAll("input[name]")].map((i) => [i.name, i.value]));
+  const r = await api(`/api/channels/${encodeURIComponent(channelId)}/instagram`, { method: "POST", body });
+  toast(`Instagram conectado: ${r.account}`);
 }
 
 function draw() {
   const box = $("#instagram");
   if (!data || !box || box.contains(document.activeElement)) return;
-  const posts = data.posts.filter((p) => FILTERS[filter].includes(p.status));
+  const posts = data.posts.filter((p) => FILTERS[filter].includes(p.status) && (!ctx.channel || p.channel_id === ctx.channel));
   box.innerHTML = `
     ${statusChips()}
     ${composer()}
@@ -149,7 +196,8 @@ function draw() {
     ${configCard()}`;
 }
 
-export async function renderInstagram() {
+export async function renderInstagram(context) {
+  if (context) ctx = context;
   data = await api("/api/instagram");
   const pending = data.posts.filter((p) => p.status === "PENDING").length;
   const pill = $("#ig-count");
@@ -173,8 +221,8 @@ async function onClick(e) {
   if (!b) return;
   e.preventDefault();
   if (b.dataset.act === "token") {
-    const t = await api("/api/instagram/token/check", { method: "POST" });
-    toast(t.error ? `Token: ${t.error}` : t.expiresAt ? `Token válido até ${new Date(t.expiresAt).toLocaleDateString("pt-BR")}` : "Token válido (sem data de expiração)", !!t.error);
+    await api("/api/instagram/token/check", { method: "POST" });
+    toast("Tokens conferidos");
     return reload();
   }
   const card = b.closest("[data-ig]");
@@ -233,7 +281,7 @@ async function onSubmit(e) {
   if (e.target.id === "ig-new") {
     const file = e.target.photo.files[0];
     if (!file) return;
-    const q = new URLSearchParams({ name: file.name, type: e.target.type.value, briefing: e.target.briefing.value });
+    const q = new URLSearchParams({ channel: e.target.channel.value, name: file.name, type: e.target.type.value, briefing: e.target.briefing.value });
     toast("Enviando a foto…");
     const r = await fetch(`/api/instagram/posts?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: file });
     const out = await r.json().catch(() => ({}));

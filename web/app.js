@@ -1,6 +1,6 @@
 // Dashboard da Central de Cortes — JS puro, sem build. Estado vem de /api/state e é atualizado via SSE.
 import { previewConfig, updatePreview } from "./preview.js";
-import { renderInstagram, wireInstagram } from "./instagram.js";
+import { instagramCard, renderInstagram, saveInstagramAccount, wireInstagram } from "./instagram.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -14,7 +14,7 @@ const usd = (n) => `$${(n || 0).toFixed(n >= 1 ? 2 : 4)}`;
 const fmtN = (n) => (n || 0).toLocaleString("pt-BR");
 const when = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
-const PLATFORM = { youtube: "▶ YouTube", tiktok: "♪ TikTok" };
+const PLATFORM = { youtube: "▶ YouTube", tiktok: "♪ TikTok", instagram: "◎ Instagram" };
 
 let state = { channels: [], jobs: [], clips: [], posts: [], costs: [], daily: [], workers: [], templates: [], assets: [], integrations: {} };
 const ui = {
@@ -917,6 +917,7 @@ function renderIntegrations() {
         "Publica os cortes como Shorts no canal conectado. As chaves do app servem para todos os canais; cada canal conecta a própria conta.")}
       ${platformCard("tiktok", ["tiktok_client_key", "tiktok_client_secret"],
         "Envia os cortes como rascunho para a caixa de entrada do app (ou posta direto, com app auditado). Cada canal conecta a própria conta.")}
+      ${instagramCard(ch)}
     </div>
     ${ch ? "" : `<div class="muted">Selecione um canal à esquerda para conectar as contas dele.</div>`}`;
 }
@@ -1454,7 +1455,7 @@ function render() {
   if (ui.tab === "costs") renderCosts();
   if (ui.tab === "perf") renderPerf();
   if (ui.tab === "agenda") renderAgenda();
-  if (ui.tab === "instagram") renderInstagram().catch((e) => toast(e.message, true));
+  if (ui.tab === "instagram") renderInstagram({ channels: state.channels, channel: ui.channel }).catch((e) => toast(e.message, true));
 }
 
 // ---------------- Agenda (calendário) ----------------
@@ -2136,6 +2137,12 @@ $("#integrations").addEventListener("change", act(async (e) => {
 }));
 $("#integrations").addEventListener("submit", act(async (e) => {
   e.preventDefault();
+  if (e.target.dataset.igAccount !== undefined) {
+    await saveInstagramAccount(e.target, ui.channelId);
+    document.activeElement?.blur();
+    await refresh();
+    return;
+  }
   await saveSettingsForm(e.target);
 }));
 wireStudio();
