@@ -68,8 +68,8 @@ function check() {
   if (st.critical && !alerted) {
     alerted = true;
     void tg.alert(
-      `💾 Disco do notebook quase cheio: ${st.freeGb} GB livres.\nO worker parou de receber vídeos novos até liberar espaço. ` +
-        `Publique/rejeite cortes pendentes ou libere espaço no notebook.`,
+      `💾 Disco do hub quase cheio: ${st.freeGb} GB livres.\nO worker parou de receber vídeos novos até liberar espaço. ` +
+        `Publique/rejeite cortes pendentes ou libere espaço em disco.`,
     );
   }
   if (!st.critical) alerted = false;

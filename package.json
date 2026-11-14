@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node app/main.ts",
     "dev": "node --watch app/main.ts",
+    "doctor": "node app/doctor.ts",
     "check": "tsc --noEmit"
   },
   "repository": {

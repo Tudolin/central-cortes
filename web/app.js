@@ -260,7 +260,7 @@ function renderWorkers() {
   el.className = `worker ${online.length ? "on" : "off"}`;
   el.title = state.workers.map((w) => `${w.name}: visto ${when(w.last_seen)} ${w.task ? "— " + w.task : ""}`).join("\n") || "Nenhum worker conectou ainda";
   const d = state.disk;
-  const disk = d ? ` · <span class="${d.critical ? "disk-crit" : d.low ? "disk-low" : ""}" title="Espaço livre no notebook${d.critical ? " — worker pausado até liberar espaço" : ""}">💾 ${d.freeGb} GB</span>` : "";
+  const disk = d ? ` · <span class="${d.critical ? "disk-crit" : d.low ? "disk-low" : ""}" title="Espaço livre no disco do hub${d.critical ? " — worker pausado até liberar espaço" : ""}">💾 ${d.freeGb} GB</span>` : "";
   el.innerHTML = (online.length
     ? `<i></i>${online.map((w) => esc(w.name)).join(", ")}${online.some((w) => w.task) ? " · trabalhando" : " · ocioso"}`
     : `<i></i>worker offline`) + disk;

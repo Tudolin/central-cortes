@@ -7,6 +7,18 @@ URL/arquivo ─► yt-dlp ─► ffmpeg+whisper.cpp ─► Claude (curadoria) �
    Na Fila        │        Transcrevendo          Análise de IA          Renderizando FFmpeg        Pendente    Agendado     Publicado
 ```
 
+## Tudo em um PC só (jeito mais fácil)
+
+Não precisa de servidor, Docker nem Tailscale: painel e processamento rodam juntos na mesma máquina (`ROLE=all`). No Windows, baixe o projeto e rode na pasta dele:
+
+```bash
+powershell -ExecutionPolicy Bypass -File deploy\setup-windows.ps1
+```
+
+O script instala o que falta (Node 24, ffmpeg, yt-dlp, whisper.cpp e o modelo), cria o `.env`, confere tudo, deixa o programa iniciando com o Windows e abre o painel em `http://localhost:8080`. Guia completo, opções e limitações em [docs/um-pc.md](docs/um-pc.md). No Linux, `deploy/install-debian.sh` faz o equivalente (veja [Instalação (Debian)](#instalação-debian)).
+
+Para conferir uma instalação em qualquer modo: `npm run doctor`.
+
 ## Hub + worker (PC pesado, notebook 24h)
 
 O mesmo código roda em dois papéis, escolhidos por `ROLE` no `.env`:
@@ -33,6 +45,14 @@ sudo tailscale serve --bg --https=10004 http://127.0.0.1:8095
 
 ### Rodar o worker (PC)
 
+No Windows, um comando instala as dependências, grava o `.env` (`ROLE=worker`, `HUB_URL`, `WORKER_TOKEN`), testa a conexão com o hub e deixa o worker subindo sozinho com o Windows:
+
+```bash
+powershell -ExecutionPolicy Bypass -File deploy\setup-windows.ps1 -Role worker -HubUrl http://IP_DO_HUB:8095 -WorkerToken SEGREDO
+```
+
+O `WORKER_TOKEN` é o mesmo do `.env` do hub. Se o `.env` do PC já existe, basta rodar o script sem parâmetros. Manualmente:
+
 ```bash
 npm install
 ```
@@ -40,6 +60,8 @@ npm install
 ```bash
 node app/main.ts
 ```
+
+Painel mostrando `worker offline`? No PC, `npm run doctor` diz se falta algum programa, se o hub está alcançável e se o token confere; o log fica em `data\worker.log`.
 
 ### Agenda e publicação
 
@@ -141,6 +163,7 @@ Placeholders: `{titulo_corte}`, `{url_com_timestamp}`, `{url_video_original}`, `
 ```
 app/
   main.ts            boot (servidor + workers)
+  doctor.ts          diagnóstico da instalação (npm run doctor)
   config.ts          .env, binários, tabela de preços
   db.ts              schema SQLite + canal padrão
   server.ts          API REST, SSE, mídia com Range, Basic Auth
@@ -155,7 +178,8 @@ app/
     render.ts        ffmpeg final + thumbnail
     caption.ts       legenda social + JSON do contrato
 web/                 dashboard
-deploy/              instalador Debian + unit systemd
+deploy/              instaladores (Windows e Debian), inicialização automática, unit systemd
+docs/                guias (um PC só, auditoria do TikTok)
 ```
 
 O pipeline Python anterior (`main.py`, `src/`) continua no repositório, intocado.
