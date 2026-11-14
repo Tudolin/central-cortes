@@ -71,6 +71,10 @@ Painel mostrando `worker offline`? No PC, `npm run doctor` diz se falta algum pr
 - Falha de publicação tenta de novo em 5, 20 e 60 min; plataformas que já deram certo não são repetidas.
 - **Credenciais**: URL pública, bot do Telegram e chaves de app do YouTube/TikTok são configuradas no dashboard (Canais → Contas conectadas), cada uma com um guia passo a passo. O `.env` continua aceito como fallback. Comandos do bot: `/status`, `/agenda`.
 
+## Posts de foto no Instagram
+
+Além dos cortes, o hub publica posts de foto (Feed e Story) no Instagram: você manda a foto com um briefing pelo painel ou pelo bot do Telegram, a IA escreve a legenda, o Templated.io aplica a moldura e o post entra na aprovação e na agenda. Configuração, endereço público das fotos e migração do antigo `ig-agent` em [docs/instagram.md](docs/instagram.md).
+
 ## Por que essa stack
 
 | Peça | Escolha | Motivo |
@@ -179,7 +183,7 @@ app/
     caption.ts       legenda social + JSON do contrato
 web/                 dashboard
 deploy/              instaladores (Windows e Debian), inicialização automática, unit systemd
-docs/                guias (um PC só, auditoria do TikTok)
+docs/                guias (um PC só, Instagram, auditoria do TikTok)
 ```
 
 O pipeline Python anterior (`main.py`, `src/`) continua no repositório, intocado.

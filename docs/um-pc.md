@@ -37,7 +37,7 @@ Com o PC desligado na hora de um post, nada se perde: ao ligar, o que atrasou at
 
 O script pergunta a chave da Anthropic (Enter vazio = IA local com Ollama) e faz o resto:
 
-- instala pelo `winget` o que faltar: Node.js 24, ffmpeg e yt-dlp;
+- instala o Node.js 24 se faltar (pelo `winget` ou, sem ele, pelo instalador oficial) e baixa ffmpeg e yt-dlp para `tools\` quando não estão no PATH;
 - baixa o whisper.cpp (versão CUDA se houver placa NVIDIA) para `tools\whisper` e o modelo de transcrição para `models\`;
 - cria o `.env` com `ROLE=all`, painel em `http://localhost:8080` atendendo só o próprio PC, e render por NVENC quando há GPU;
 - roda o diagnóstico (`npm run doctor`);

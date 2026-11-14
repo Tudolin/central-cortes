@@ -1,5 +1,6 @@
 // Dashboard da Central de Cortes — JS puro, sem build. Estado vem de /api/state e é atualizado via SSE.
 import { previewConfig, updatePreview } from "./preview.js";
+import { renderInstagram, wireInstagram } from "./instagram.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -1453,6 +1454,7 @@ function render() {
   if (ui.tab === "costs") renderCosts();
   if (ui.tab === "perf") renderPerf();
   if (ui.tab === "agenda") renderAgenda();
+  if (ui.tab === "instagram") renderInstagram().catch((e) => toast(e.message, true));
 }
 
 // ---------------- Agenda (calendário) ----------------
@@ -2137,6 +2139,7 @@ $("#integrations").addEventListener("submit", act(async (e) => {
   await saveSettingsForm(e.target);
 }));
 wireStudio();
+wireInstagram(toast);
 
 /** Links vindos do Telegram (#clip=ID) e retorno do OAuth (#channels:plataforma:mensagem). */
 function handleHash() {

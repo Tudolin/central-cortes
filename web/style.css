@@ -577,3 +577,31 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 }
 
 .ev-post { border-left-style: double; border-left-width: 5px; }
+
+/* ---------- Instagram (posts de foto) ---------- */
+#instagram { display: grid; gap: 16px; max-width: 1100px; }
+.ig-chips { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
+.ig-new { display: grid; gap: 12px; }
+.ig-new-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+.ig-new-grid label, .ig-config label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.ig-new-grid .full { grid-column: 1 / -1; }
+.ig-new .help { margin-left: 10px; font-size: 12px; }
+.ig-filter { max-width: 420px; }
+.ig-list { display: grid; gap: 12px; }
+.ig-post { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+.ig-img { aspect-ratio: 1; background: var(--panel-2); border-radius: 6px; overflow: hidden; display: grid; place-items: center; }
+.ig-img.story { aspect-ratio: 9 / 16; max-width: 150px; }
+.ig-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ig-body { display: grid; gap: 8px; min-width: 0; }
+.ig-body textarea { width: 100%; resize: vertical; }
+.ig-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ig-head a { color: var(--blue); font-size: 13px; }
+.ig-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ig-error { color: var(--red); font-size: 13px; overflow-wrap: anywhere; }
+.ig-post .help, .ig-config .help { font-size: 12px; line-height: 1.4; }
+.ig-config summary { cursor: pointer; }
+.ig-config form { margin-top: 12px; }
+.ig-config code { background: var(--panel-2); padding: 1px 5px; border-radius: 3px; font-size: 12px; overflow-wrap: anywhere; }
+.tag.ok { border-color: var(--green); color: var(--green); }
+.tag.warn { border-color: var(--hl); color: #8a6500; }
+@media (max-width: 700px) { .ig-post, .ig-new-grid { grid-template-columns: minmax(0, 1fr); } .ig-img { max-width: 260px; } }

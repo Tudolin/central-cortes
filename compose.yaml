@@ -10,10 +10,13 @@ services:
       ROLE: hub
       PORT: "8095"
       DATA_DIR: /app/data
+      IG_MEDIA_PORT: "8096"
     ports:
       # Local (Tailscale Serve faz o https) + IP do Tailscale (o worker do PC chega por aqui).
       - "127.0.0.1:8095:8095"
       - "${TAILSCALE_IP:-127.0.0.1}:8095:8095"
+      # Fotos dos posts do Instagram (só /public/ig/*): é aqui que o túnel público aponta (deploy/ig-media-tunnel.sh).
+      - "127.0.0.1:8096:8096"
       # Tela remota do navegador do robô (KasmVNC do cortes-browser, que usa a rede deste container).
       - "127.0.0.1:3011:3000"
     volumes:
