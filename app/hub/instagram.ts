@@ -110,7 +110,8 @@ function publicPhotoUrl(p: IgPost) {
 interface IgAccount {
   userId: string;
   token: string;
-  account: string;
+  account: string; // @usuario; vazio enquanto a Meta não confirmou o token
+  error: string; // último problema com o token (expirado, revogado…), mostrado no painel
   templates: Record<IgType, string>;
 }
 function accountOf(channelId: string): IgAccount | null {
@@ -121,14 +122,23 @@ function accountOf(channelId: string): IgAccount | null {
     userId: c.instagram_user_id,
     token: c.instagram_access_token,
     account: c.instagram_account ?? "",
+    error: c.instagram_error ?? "",
     templates: { FEED: c.instagram_template_feed ?? "", STORIES: c.instagram_template_story ?? "" },
   };
 }
 const connectedChannels = () => all<Channel>("SELECT * FROM channels ORDER BY created_at").filter((c) => accountOf(c.id));
+const accountName = (a: IgAccount) => a.account || `ID ${a.userId}`;
 const channelLabel = (channelId: string) => {
-  const acct = accountOf(channelId)?.account;
-  return `${getChannel(channelId)?.name ?? channelId}${acct ? ` (${acct})` : ""}`;
+  const a = accountOf(channelId);
+  return `${getChannel(channelId)?.name ?? channelId}${a ? ` (${accountName(a)})` : ""}`;
 };
+
+/** Mensagem da Meta traduzida para o que a pessoa precisa fazer. */
+function tokenProblem(msg: string) {
+  if (/session has expired|expired/i.test(msg)) return `O token expirou (${msg.replace(/^Instagram:\s*/, "")}). Gere um novo e salve na conta do canal.`;
+  if (/revoked|changed the password|logged out|not authorized/i.test(msg)) return `O token foi revogado pela Meta (${msg.replace(/^Instagram:\s*/, "")}). Gere um novo e salve na conta do canal.`;
+  return msg;
+}
 const templateFor = (p: IgPost) => accountOf(p.channel_id)?.templates[p.media_type] ?? "";
 
 // ---------- Legenda (DeepSeek) ----------
@@ -332,6 +342,7 @@ async function checkToken(channelId: string): Promise<TokenState | null> {
     const info = ((await r.json()) as { data?: { expires_at?: number; is_valid?: boolean; error?: { message: string } } }).data;
     if (!info || info.is_valid === false) throw new Error(info?.error?.message ?? "token inválido");
     st.expiresAt = (info.expires_at ?? 0) * 1000;
+    if (acct.error) setCredentials(channelId, { instagram_error: null });
     const daysLeft = (st.expiresAt - Date.now()) / 86400_000;
     if (!st.expiresAt || daysLeft > 10) return st;
     const ex = await fetch(`${GRAPH}/oauth/access_token?${new URLSearchParams({ grant_type: "fb_exchange_token", client_id: app, client_secret: secret, fb_exchange_token: acct.token })}`, { signal: AbortSignal.timeout(30_000) });
@@ -341,7 +352,8 @@ async function checkToken(channelId: string): Promise<TokenState | null> {
     st.expiresAt = fresh.expires_in ? Date.now() + fresh.expires_in * 1000 : 0;
     await notify(`✅ Instagram · ${channelLabel(channelId)}: token renovado automaticamente.`);
   } catch (e) {
-    st.error = errMsg(e);
+    st.error = tokenProblem(errMsg(e));
+    setCredentials(channelId, { instagram_error: st.error });
     console.error(`[instagram] token de ${channelId}: ${st.error}`);
     if (!hadError) await notify(`⚠️ Instagram · ${channelLabel(channelId)}: não consegui validar/renovar o token.\n${st.error}\n\nGere um token novo e reconecte a conta em Configurações → Contas conectadas.`);
   }
@@ -360,7 +372,10 @@ async function lookupAccount(userId: string, token: string) {
 
 /**
  * Instalações que vieram do ig-agent têm a conta no .env (IG_USER_ID, IG_ACCESS_TOKEN…), sem canal.
- * Uma única vez, ela vira a conta conectada de um canal criado com o nome do perfil; os posts sem canal vão para ele.
+ * Uma única vez, ela vira a conta conectada de um canal próprio; os posts sem canal vão para ele.
+ * Com o token aceito pela Meta, o canal recebe o nome do perfil. Com o token vencido ou revogado, a conta
+ * é adotada do mesmo jeito (o ID e as molduras não se perdem), num canal "Instagram" marcado para
+ * reconectar: ao salvar um token novo no painel, o canal passa a ter o nome do perfil.
  */
 async function adoptEnvAccount() {
   if (get("SELECT 1 FROM settings WHERE key = 'instagram_adopted'")) return;
@@ -369,24 +384,51 @@ async function adoptEnvAccount() {
   if (!userId || !token) return;
   let target = connectedChannels()[0]?.id;
   if (!target) {
-    const who = await lookupAccount(userId, token);
-    target = who.username.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    let who: Awaited<ReturnType<typeof lookupAccount>> | null = null;
+    let problem = "";
+    try {
+      who = await lookupAccount(userId, token);
+    } catch (e) {
+      // Sem resposta da Meta (rede): tenta de novo mais tarde. Resposta com erro (token ruim): adota assim mesmo.
+      if (!/^Instagram:/.test(errMsg(e))) throw e;
+      problem = tokenProblem(errMsg(e));
+    }
+    target = who ? who.username.toLowerCase().replace(/[^a-z0-9_]/g, "_") : "instagram";
     if (!getChannel(target)) {
-      run("INSERT INTO channels (id, name, caption_template, publish_targets) VALUES (?, ?, ?, '[]')", target, who.name, "{titulo_corte}");
+      run("INSERT INTO channels (id, name, caption_template, publish_targets) VALUES (?, ?, ?, '[]')", target, who?.name ?? "Instagram", "{titulo_corte}");
       ensureTemplates(target);
     }
     setCredentials(target, {
       instagram_user_id: userId,
       instagram_access_token: token,
-      instagram_account: who.account,
+      instagram_account: who?.account ?? null,
+      instagram_error: problem || null,
+      instagram_rename: who ? null : "1",
       instagram_template_feed: read("templated_template_feed") || null,
       instagram_template_story: read("templated_template_story") || null,
     });
-    console.log(`[instagram] conta ${who.account} do .env conectada ao canal ${target}`);
+    console.log(`[instagram] conta ${who?.account ?? `ID ${userId}`} do .env conectada ao canal ${target}${problem ? ` (${problem})` : ""}`);
+    if (problem) await notify(`⚠️ Instagram: a conta que estava no ig-agent foi trazida para o canal "${getChannel(target)?.name}", mas ${problem}\n\nNo painel: Configurações → ${getChannel(target)?.name} → Contas conectadas → Instagram.`);
   }
   run("UPDATE ig_posts SET channel_id = ? WHERE channel_id = ''", target);
   run("INSERT OR REPLACE INTO settings (key, value) VALUES ('instagram_adopted', ?)", target);
   bus.emit("change", { table: "channels" });
+}
+
+/**
+ * Token curto (o do Graph API Explorer vale ~1 h) vira um de longa duração (~60 dias), se o app da Meta
+ * estiver salvo. Se a troca falhar, segue com o token informado.
+ */
+async function longLived(token: string) {
+  const app = read("facebook_app_id");
+  const secret = read("facebook_app_secret");
+  if (!app || !secret) return token;
+  try {
+    const r = await fetch(`${GRAPH}/oauth/access_token?${new URLSearchParams({ grant_type: "fb_exchange_token", client_id: app, client_secret: secret, fb_exchange_token: token })}`, { signal: AbortSignal.timeout(30_000) });
+    return ((await r.json()) as { access_token?: string }).access_token || token;
+  } catch {
+    return token;
+  }
 }
 
 // ---------- Telegram ----------
@@ -578,7 +620,8 @@ route("GET", "/api/instagram", () => {
       return {
         channel_id: c.id,
         name: c.name,
-        account: a.account,
+        account: accountName(a),
+        error: a.error,
         frame: { FEED: templated && !!a.templates.FEED, STORIES: templated && !!a.templates.STORIES },
         token: tokenStates.get(c.id) ?? null,
       };
@@ -596,15 +639,20 @@ route("POST", "/api/channels/:id/instagram", async (_q, _r, [id], body: { user_i
   const ch = must(getChannel(id), "Canal");
   const cur = credentialsOf(ch);
   const userId = (body?.user_id ?? "").trim() || cur.instagram_user_id;
-  const token = (body?.token ?? "").trim() || cur.instagram_access_token;
-  if (!userId || !token) throw new HttpError(400, "Informe o ID do usuário do Instagram e o token de acesso");
+  const typed = (body?.token ?? "").trim();
+  if (!userId || !(typed || cur.instagram_access_token)) throw new HttpError(400, "Informe o ID do usuário do Instagram e o token de acesso");
+  const token = typed ? await longLived(typed) : cur.instagram_access_token;
   const who = await lookupAccount(userId, token).catch((e: Error) => {
-    throw new HttpError(400, e.message);
+    throw new HttpError(400, tokenProblem(e.message));
   });
+  // Canal criado na migração do ig-agent com token vencido: agora sabemos o nome do perfil.
+  if (cur.instagram_rename) run("UPDATE channels SET name = ? WHERE id = ?", who.name, ch.id);
   setCredentials(ch.id, {
     instagram_user_id: userId,
     instagram_access_token: token,
     instagram_account: who.account,
+    instagram_error: null,
+    instagram_rename: null,
     instagram_template_feed: (body?.template_feed ?? "").trim() || null,
     instagram_template_story: (body?.template_story ?? "").trim() || null,
   });

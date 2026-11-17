@@ -44,7 +44,7 @@ function statusChips() {
   const chip = (ok, yes, no) => `<span class="${ok ? "ok-dot" : "muted"}">${ok ? yes : no}</span>`;
   const accounts = shownAccounts().map((a) => {
     const frame = [a.frame.FEED && "Feed", a.frame.STORIES && "Story"].filter(Boolean).join(" e ");
-    const token = a.token?.error ? ` <span class="tag bad" title="${esc(a.token.error)}">token com problema</span>`
+    const token = a.error ? ` <span class="tag bad">token com problema</span><div class="ig-error ig-account-error">${esc(a.error)} <b>Configurações → ${esc(a.name)} → Contas conectadas → Instagram.</b></div>`
       : a.token?.expiresAt ? ` <span class="muted">· token até ${new Date(a.token.expiresAt).toLocaleDateString("pt-BR")}</span>` : "";
     return `<div class="ig-account"><span class="ok-dot"><b>${esc(a.name)}</b> ${esc(a.account)}</span>
       <span class="muted">${frame ? `moldura em ${frame}` : "sem moldura"}</span>${token}</div>`;
@@ -155,18 +155,20 @@ export function instagramCard(ch) {
   const ig = ch?.instagram ?? {};
   return `<form class="integ" data-ig-account>
     <div class="integ-head"><b>◎ Instagram</b>
-      ${ch ? (acct ? `<span class="ok-dot">${esc(ch.name)}: ${esc(acct)}</span>` : `<span class="muted">${esc(ch.name)}: não conectado</span>`) : ""}</div>
+      ${ch ? (acct ? `<span class="${ig.error ? "bad-dot" : "ok-dot"}">${esc(ch.name)}: ${esc(acct)}</span>` : `<span class="muted">${esc(ch.name)}: não conectado</span>`) : ""}</div>
+    ${ch && ig.error ? `<div class="ig-error">⚠️ ${esc(ig.error)} Cole o token novo abaixo e clique em Salvar; o ID e as molduras já estão preenchidos.</div>` : ""}
     <div class="muted help">Publica posts de foto (Feed e Story) na conta do canal, pela aba Instagram ou pelo bot do Telegram. Cada canal conecta a própria conta.</div>
     <details class="guide"><summary>📖 Como obter as credenciais</summary><ol>
       <li>A conta do Instagram precisa ser <b>profissional</b> (comercial ou criador) e estar ligada a uma <b>Página do Facebook</b>.</li>
-      <li>Em <code>developers.facebook.com</code>, crie um app e gere um token de usuário com a permissão de publicar conteúdo (<code>instagram_content_publish</code>).</li>
-      <li>Troque esse token por um de <b>longa duração</b> (vale cerca de 60 dias).</li>
+      <li>Em <code>developers.facebook.com/tools/explorer</code>, escolha o app, clique em <b>Generate Access Token</b> e marque as permissões
+        <code>instagram_basic</code>, <code>instagram_content_publish</code>, <code>pages_show_list</code> e <code>pages_read_engagement</code>.</li>
+      <li>Cole o token aqui. Com o ID e o segredo do app salvos (aba Instagram → Configuração geral), o hub o troca sozinho por um de <b>longa duração</b> (~60 dias) e renova antes de vencer.</li>
       <li>O <b>ID do usuário do Instagram</b> aparece em <code>/me/accounts?fields=instagram_business_account</code>.</li>
       <li>Para o token se renovar sozinho, salve o ID e o segredo do app na aba Instagram → Configuração geral.</li>
     </ol></details>
     ${ch ? `
     <label>ID do usuário do Instagram (IG User ID)<input name="user_id" autocomplete="off" value="${esc(ig.user_id)}"></label>
-    <label>Token de acesso de longa duração<input name="token" type="password" autocomplete="off" placeholder="${acct ? "salvo — em branco mantém" : ""}"></label>
+    <label>Token de acesso<input name="token" type="password" autocomplete="off" placeholder="${acct ? (ig.error ? "cole o token novo" : "salvo — em branco mantém") : ""}"></label>
     <label>Modelo de moldura do Feed no Templated (opcional)<input name="template_feed" autocomplete="off" value="${esc(ig.template_feed)}"></label>
     <label>Modelo de moldura do Story no Templated (opcional)<input name="template_story" autocomplete="off" value="${esc(ig.template_story)}"></label>
     <div class="actions">

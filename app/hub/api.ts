@@ -23,9 +23,19 @@ const publicChannel = (c: Channel) => {
   return {
     ...c,
     credentials: Object.keys(creds).filter((k) => !/^(youtube|tiktok|instagram)_/.test(k)),
-    connections: { youtube: creds.youtube_account ?? null, tiktok: creds.tiktok_account ?? null, instagram: creds.instagram_account ?? null },
-    // Conta do Instagram (posts de foto): o token nunca volta ao navegador.
-    instagram: { user_id: creds.instagram_user_id ?? "", template_feed: creds.instagram_template_feed ?? "", template_story: creds.instagram_template_story ?? "" },
+    connections: {
+      youtube: creds.youtube_account ?? null,
+      tiktok: creds.tiktok_account ?? null,
+      // Conta do Instagram: o @ quando a Meta confirmou; só o ID enquanto o token não foi aceito.
+      instagram: creds.instagram_account || (creds.instagram_user_id ? `ID ${creds.instagram_user_id}` : null),
+    },
+    // Detalhes da conta do Instagram (posts de foto). O token nunca volta ao navegador.
+    instagram: {
+      user_id: creds.instagram_user_id ?? "",
+      error: creds.instagram_error ?? "",
+      template_feed: creds.instagram_template_feed ?? "",
+      template_story: creds.instagram_template_story ?? "",
+    },
     robot: robotStatus(c.id),
     ytrobot: robotStatus(c.id, "youtube"),
   };
@@ -495,7 +505,7 @@ route("GET", "/oauth/tiktok/callback", finishOAuth("tiktok"), "public");
 route("POST", "/api/channels/:id/disconnect/:platform", (_q, _r, [id, platform]) => {
   must(getChannel(id), "Canal");
   const keys = platform === "youtube" ? ["youtube_refresh_token", "youtube_account"]
-    : platform === "instagram" ? ["instagram_user_id", "instagram_access_token", "instagram_account", "instagram_template_feed", "instagram_template_story"]
+    : platform === "instagram" ? ["instagram_user_id", "instagram_access_token", "instagram_account", "instagram_error", "instagram_rename", "instagram_template_feed", "instagram_template_story"]
     : ["tiktok_access_token", "tiktok_refresh_token", "tiktok_expires_at", "tiktok_scope", "tiktok_account"];
   setCredentials(id, Object.fromEntries(keys.map((k) => [k, null])));
   return { ok: true };

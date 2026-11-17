@@ -612,3 +612,6 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .ig-who { font-size: 12px; }
 .ig-new-grid label { min-width: 0; }
 .ig-new-grid select, .ig-new-grid textarea, .ig-new-grid input { width: 100%; max-width: 100%; min-width: 0; }
+.bad-dot { color: var(--red); font-size: 13px; }
+.bad-dot::before { content: "● "; }
+.ig-account-error { flex-basis: 100%; }
