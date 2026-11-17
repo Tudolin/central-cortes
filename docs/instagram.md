@@ -70,7 +70,7 @@ Requer o `cloudflared` instalado. As fotos ficam em nomes de 32 caracteres aleat
    ```
 
 3. Instale o túnel das fotos (seção acima) e reinicie o hub.
-4. Na primeira subida com `IG_USER_ID` e `IG_ACCESS_TOKEN` no `.env`, o hub cria sozinho um canal com o nome do perfil e conecta a conta nele (com os modelos `TEMPLATE_ID_FEED`/`TEMPLATE_ID_STORY`). Em Configurações, preencha o nicho e o tom desse canal: é deles que sai a voz da legenda (o prompt do `ig-agent` tinha esses campos em branco).
+4. Na primeira subida com `IG_USER_ID` e `IG_ACCESS_TOKEN` no `.env`, o hub cria sozinho um canal com o nome do perfil e conecta a conta nele (com os modelos `TEMPLATE_ID_FEED`/`TEMPLATE_ID_STORY`). Se a Meta recusar o token herdado (vencido ou revogado), a conta é trazida do mesmo jeito, num canal "Instagram" com o aviso do problema: cole um token novo no cartão Instagram desse canal e ele passa a ter o nome do perfil. Em Configurações, preencha o nicho e o tom desse canal: é deles que sai a voz da legenda (o prompt do `ig-agent` tinha esses campos em branco).
 5. Faça um post de teste. Funcionando, desligue o serviço antigo:
 
    ```bash
